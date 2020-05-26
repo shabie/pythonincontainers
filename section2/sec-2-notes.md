@@ -18,7 +18,7 @@
 	f. removing
 	g. dead
 
-5. Docker names can be changed with `docker container rename <OLD_AUTO_NAME> <NEW_NAME>`
+5. Docker names can be changed with `docker container rename <OLD_NAME> <NEW_NAME>`
 
 6. The command `docker container start <CONTAINER_NAME_OR_ID` has an `-i` flag but no `-t` flag.
 The reason behind this is that once the container has been created, `start` command only starts it.
