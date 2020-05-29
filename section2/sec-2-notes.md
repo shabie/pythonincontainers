@@ -249,7 +249,7 @@ of this network become visible to this newly joined container.
 31. `docker network create --internal <NETWORK_NAME>` creates a network that can let containers joining it be visible
 to each other but has no internet connectivity. This is useful if a potentially suspicious image is being run.
 
-## Data Persistency
+## Data Persistence
 
 1. Containers are stateless. They are essentially ephemeral. Storing data inside its filesystem means data is gone as 
 soon as the container is gone. Furthermore, even if such an ephemeral use is acceptable to you, it is better to use
@@ -263,7 +263,7 @@ the `tmpfs` mount. Quote from official docs:
 possibility to mount volumes to containers.
 
 3. `docker volume create my-vol` creates a new volume. It is created on the local host filesystem (or the VM if we are
-using a non-linux OS.). Inspecting is with `docker volume inspect my-vol` on an ubuntu OS returns this for me:
+using a non-linux OS.). Inspecting it with `docker volume inspect my-vol` on an ubuntu OS returns this for me:
 
     ```json5
     [
@@ -294,8 +294,8 @@ lost.
 8. Naturally, volumes can be removed as well using the following command:
 
     `docker volume rm <VOLUME_NAME>`
-    
-    If the volume is mounted to a container, this will fail. First he container must be removed.
+
+    If the volume is mounted to a container, this will fail. First the container must be removed.
     
 9. Docker has a special kind of a volume mount called **bind mount** that translates to mounting a directory of the host
 to the container. This is specially useful in a development environment where you want to use the IDEs etc installed
@@ -307,14 +307,15 @@ production later). The general syntax is as follows:
     Examples:
     
     `docker run -v ${PWD}:/app <IMAGE_NAME>`
+
     `docker run -v ${PWD}/data:/data <IMAGE_NAME>`
 
 10. **Bind mounts** have limited functionality since they are managed outside of docker and can't be part of the 
 **Dockerfile** since this would amount to hard-coding the absolute path of the host dir in the Docker file which may 
 not exist in the next system the image is run on. Hence, docker volumes are the way to go in that case.
 
-    Direct quote of first paragraph on (bind mounts)[]:
-    
+    Direct quote of first paragraph on [bind mounts](https://docs.docker.com/storage/volumes/):
+ 
     >Bind mounts have been around since the early days of Docker. Bind mounts have limited functionality compared to 
     volumes. When you use a bind mount, a file or directory on the host machine is mounted into a container. The file 
     or directory is referenced by its full or relative path on the host machine. By contrast, when you use a volume, 
