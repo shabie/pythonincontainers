@@ -329,4 +329,56 @@ not exist in the next system the image is run on. Hence, docker volumes are the 
 
 ## Dockerfile
 
+1. To share code that leads to perfectly reproducible outcome, we also need the right environment. 
+
+2. This can be done with the means of a Dockerfile that can be used to create a container image using **`docker 
+build ...`**. The image can then be used to start a container in which the code runs as we expect it to. This is
+a best practice.
+
+3. Images are build on top of images. Very often a `Dockerfile` begins with:
+    
+    `FROM python`
+    
+    This indicates that the image we plan to build takes `python` image as its base image. It is kind of subclassing
+    from a parent class... **kind of**.
+    
+4. Docker creates a temporary container out of the base image. This build container is then used to execute the remaining
+Dockerfile instructions shaping it as the user wishes to.
+
+5. `WORKDIR <path>` sets the working directory of the container to `<path>`. If the directory is not available, it will
+be created. That is why we often don't see a separate `RUN mkdir ...` before it.
+
+6. `COPY . .` copies contents of current directory on our build host to *working directory* (set with `WORKDIR`)
+of the container. We can use absolute or relative paths for `COPY`. The current directory of the build host is where
+we start the build command from.
+
+7. `RUN pip install -r requirements.txt` is an example of simply a bash command that can be run using well `RUN`.
+Of course, the `pip` must already exist either as a part of base image or be installed through some earlier `RUN` command.
+`RUN` commands get executed in the **build container also**.
+
+8. `EXPOSE 5000` exposes the container port 5000 for mapping to the runtime host (i.e. the host running docker). A 
+person running our image later can simply do:
+
+    `docker run -P ...` to automatically map all container ports to the first available ports in the runtime host. The
+    flag `-P` (capital p) ensures that. If you are curious what ports might get mapped? One way to look at it
+    is to find it in the list of `docker container ps` and it should be there under the `PORTS` column.
+    
+9. `ENV FLASK_DEBUG=true` sets an environment variable `FLASK_DEBUG` to true. Interestingly, this environment variable
+will also be set in the **build container** (i.e. the temporary container created in the build phase) too for all 
+subsequent commands.
+
+10. `CMD python flask-hello.py` defines the command that should be executed when the container is fired up. As for the
+difference between `CMD` and `RUN`, this explains it well:
+
+    >**`RUN`** and **`CMD`** are both Dockerfile instructions. `RUN` lets you execute commands inside of your Docker image. These 
+    commands get executed once at build time and get written into your Docker image as a new layer. ... `CMD` lets you define 
+    a default command to run when your container starts.
+
+11. `docker build -t flask-hello:1.0 .` builds the image using the Dockerfile. `-t` flag is used to name the image
+and the subsequent `:1.0` sets the version tag (try `docker image ls` for details).  The last dot simply sets the 
+context directory to the current directory. This is where the Dockerfile is expected to be and also the contents of 
+which will be copied in to the container image.
+
+## Dockerhub
+
 1. 
