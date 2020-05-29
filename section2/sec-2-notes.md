@@ -178,7 +178,7 @@ IP address automatically.
 
     NOTE: Container Linking has been marked as legacy feature so it will disappear in the future.
 
-24. Docker environment variables can be set with `--env` or `-e` flag like this:
+24. **Docker environment variables** can be set with `--env` or `-e` flag like this:
 
     `docker run -d --name postgres --network my-net --env "POSTGRES_PASSWORD=mysecret" postgres`
 
@@ -188,19 +188,62 @@ tool to manage such postgres servers.
 26. Networking is a core capability of docker containers.
     
     * Dockers are connected to the internet through the NAT (Network Address Translation).
+    A NAT is used for assigning IP Addresses with a single host.
+    
     This basically means that each docker container has a private IP address visible only locally.
-    To the outside world, the host still has a singular IP address.
+    To the outside world, the host still has a *singular* IP address.
     
     * This means that docker containers can establish TCP connections to internet hosts.
     
-    * The other way round i.e. if internet clients' want a TCP connection to docker containers, this is
+    * The other way round i.e. if internet clients' want a TCP connection *to* the docker containers, this is
     directly not possible since publicly the clients see only one IP address (that of the host).
     
-    * The way to address this issue (of establishing incoming connections to containers), a port is exposed
-    by the container that is then mapped on to the host's port. This is called Port Forwarding.
+    * The way to address this issue (of establishing incoming connections to multiple containers running on a single 
+    host), a port is exposed by the container that is then mapped on to the host's port. 
+    This is called **Port Forwarding**.
     
-    So any (internet) network node with Host IP visibility can establish TCP connection to this mapped port
-    and effectively access the container.
+    So any (internet) network node (client) with Host IP visibility can establish TCP connection to this mapped port
+    and effectively access the docker container.
     
     * The default bridge network does not provide container name resolution (DNS resolution) i.e. no mapping
-    of names to IP Addresses.
+    of container names to IP Addresses. User-defined networks do.
+    
+27. **`docker network ls`**  - command to list all the available docker networks. Below is the one such output.
+    The only one defined by the user is `my-net`. The other three are there by default. 
+
+    | NETWORK ID   | NAME   | DRIVER | SCOPE    |
+    |:-------------|:-------|:-------|:---------|
+    |0e0df8d7fdba  | bridge | bridge | local    |
+    |d70b60b019ab  | host   | host   | local    |
+    |02b443b069d9  | my-net | bridge | local    |
+    |77a99ff9e6b2  | none   | nan    | local    |
+    
+    * A network connected to `host` has *no network isolation*. All its published ports are directly visible in the
+    host system. This is not really used in production.
+
+28. `docker network create` allows us to create user-defined networks.
+
+    * Docker uses the concept of **drivers** to extend its network capabilities. Several such drivers are available
+    built-in, others can be install as network plug-ins.
+    
+    * `bridge` is the default network driver
+    
+    * `macvlan` creates a network where containers look like separate physical devices with their own MAC addresses.
+    Supporting hardware setup is needed (so-called promiscuous mode). Not very commonly used.
+    
+    *`overlay` is very important. It allows for creation of network across several docker runtimes (or several hosts).
+    It has the scope of a **swarm** rather than individual hosts (or to be more precise individual docker engines).
+    With `docker machine` several docker runtimes can be run on a single host. These simulate a swarm on a single host
+    as well and would do well with the `overlay` driver.
+    
+29. `docker container ps --filter network=<NETWORK_NAME>` Docker containers connected to a single network can be listed 
+with this command. The command is useful if docker doesn't let you remove a network because of attached containers.
+
+30. `docker network connect <NETWORK_NAME> <CONTAINER_NAME>` to connect a container to another network. The containers
+of this network become visible to this newly joined container.
+
+    To disconnect, `docker network disconnect <NETWORK_NAME> <CONTAINER_NAME>`
+    
+31. `docker network create --internal <NETWORK_NAME>` creates a network that can let containers joining it be visible
+to each other but has no internet connectivity. This is useful if a potentially suspicious image is being run.
+
