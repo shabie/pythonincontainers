@@ -472,4 +472,267 @@ check out the different setting tabs like "Command & logging", "Volumes", "Capab
 6. Another **really** cool option is to create an image out of any container. Consider this to be a kind of a container 
 backup with all its filesystem settings and options being frozen into a (snapshot) image.
 
-7. 
+## Docker Machine [VirtualBox]
+
+**Docker Machine is a tool used to create and manage Docker Runtime environments (plural is key) encapsulated as
+virtual machines.**
+
+1. Such VMs can be created locally (on the host) or remotely in the cloud.
+
+2. So why docker machines when theoretically you could:
+    1. provision a VM with linux
+    2. install docker
+    3. enjoy full functionality?
+    
+    While Docker Machine does exactly this, it comes with a set of convenience commands that hide away the complexity
+    of architecture and a remote docker machine feels exactly like a docker engine running locally even when in cloud.
+    
+3. Docker has a so-called driver model so the same tool can provision and manage environment in a number of host types
+and technologies.
+
+4. Docker Machine can work with a number of local VMs (like VirtualBox, Hyper-V etc.) and a number of cloud providers
+like DigitalOcean, Azure, AWS, GCP etc.
+
+5. Docker Machine even has a generic driver to install docker on a remote machine accessible via SSH. I just wrote this
+point but I am not sure how to use it.
+
+6. Let's create a VM using docker machine (it is created with VirtualBox in the background due to the way its setup):
+
+    * `docker-machine create test-vm`
+    
+    This outputs the following:
+    
+    ```
+    Creating CA: /home/shabie/.docker/machine/certs/ca.pem
+    Creating client certificate: /home/shabie/.docker/machine/certs/cert.pem
+    Running pre-create checks...
+    (test-vm) Image cache directory does not exist, creating it at /home/shabie/.docker/machine/cache...
+    (test-vm) No default Boot2Docker ISO found locally, downloading the latest release...
+    (test-vm) Latest release for github.com/boot2docker/boot2docker is v19.03.5
+    (test-vm) Downloading /home/shabie/.docker/machine/cache/boot2docker.iso from https://github.com/boot2docker/boot2docker/releases/download/v19.03.5/boot2docker.iso...
+    (test-vm) 0%....10%....20%....30%....40%....50%....60%....70%....80%....90%....100%
+    Creating machine...
+    (test-vm) Copying /home/shabie/.docker/machine/cache/boot2docker.iso to /home/shabie/.docker/machine/machines/test-vm/boot2docker.iso...
+    (test-vm) Creating VirtualBox VM...
+    (test-vm) Creating SSH key...
+    (test-vm) Starting the VM...
+    (test-vm) Check network to re-create if needed...
+    (test-vm) Found a new host-only adapter: "vboxnet0"
+    (test-vm) Waiting for an IP...
+    Waiting for machine to be running, this may take a few minutes...
+    Detecting operating system of created instance...
+    Waiting for SSH to be available...
+    Detecting the provisioner...
+    Provisioning with boot2docker...
+    Copying certs to the local machine directory...
+    Copying certs to the remote machine...
+    Setting Docker configuration on the remote daemon...
+    Checking connection to Docker...
+    Docker is up and running!
+    To see how to connect your Docker Client to the Docker Engine running on this virtual machine, run: docker-machine env test-vm
+    ```
+    
+    * `docker-machine env test-vm` connects the docker client to the new VM
+    
+    The execution of the command above returns the following:
+    ```
+    export DOCKER_TLS_VERIFY="1"
+    export DOCKER_HOST="tcp://192.168.99.100:2376"
+    export DOCKER_CERT_PATH="/home/shabie/.docker/machine/machines/test-vm"
+    export DOCKER_MACHINE_NAME="test-vm"
+    # Run this command to configure your shell: 
+    # eval $(docker-machine env test-vm)
+    ```
+   
+   This sets 4 environment variables:
+   1. Sets TLS to true meaning docker client should use TLS to communicate with the new engine. TLS is a 
+   secure communication protocol.
+   2. Sets the IP address and port number for docker engine **in the machine**.
+   3. Sets the directory where keys and secrets are held used to communicate with the newly minted docker
+   engine.
+   4. Sets the name of the new machine.
+   
+   Last two lines simply show how to set a *local* shell with these 4 environment variables and here comes the
+   interesting bit:
+   
+   Once the environment variables have been set in the shell, **any subsequent Docker command use is going
+   to assume Docker Runtime in our freshly provisioned machine!** The env. variables remain set until we overwrite them
+   or explicitly unset them.
+   
+    `docker image ls` is a good proof to show that this new environment shows no images at all.
+    
+7. Interestingly, docker client simply uses the environment variables. It has no idea if the docker server is
+up and running. 
+
+    Let's remove the VM:
+
+    `docker-machine rm -f test-vm`
+    
+    The environment variables are still there. Let's try again:
+    
+    `docker image ls`
+    
+    now returns:
+    
+   `unable to resolve docker endpoint: open /home/shabie/.docker/machine/machines/test-vm/ca.pem: no such file or 
+   directory` 
+   
+8. To unset the now invalid variables, we do the following:
+
+   `env | grep DOCKER` to get the list.
+   
+   `unset DOCKER_MACHINE_NAME DOCKER_CERT_PATH DOCKER_TLS_VERIFY DOCKER_HOST` to unset it.
+   
+   OR
+   
+   you could simply do the following docker convenience command:
+   
+   `eval $(docker-machine env -u)`
+   
+   OR
+   
+   Finally, closing the shell window will also unset the environment variables :)
+   
+9. A container can be created in the machine (VM running docker), and a local dir can be shared as bind-mount. This 
+is possible since the machine uses VirtualBox Shared Folders feature to mount the dir.
+
+    Example (assuming env. variables are set for a fired-up docker machine):
+    
+    WRONG `docker run -it -v ${PWD}:/app alpine`
+    RIGHT `docker run -it -v /hosthome/shabie/Projects/containers/:/app alpine`
+    
+    because in a VM, `host` folder gets mapped to `hosthome`. I guess to avoid conflict with its own `home` folder.
+    
+    **mounts the local host directory to a container running inside the docker machine!**
+    
+10. Fun fact: The new VM created with docker-machine can be seen in the VirtualBox Manager. By default it is created
+in a headless mode i.e. with its own interface (console and GUI).
+    
+    The key settings of the VM can be viewed in the VirtualBox Manager:
+    
+    ![vm-details-docker-machine](docker-machine-vm-details.png)
+    
+11. Don't forget to manage docker machines with `docker-machine` command only since docker maintains internally a
+state of each VM.
+
+12. Summary of core `docker-machine` commands:
+
+    1. `docker-machine create`: creates and provisions a new machine (VM) with docker
+    2. `docker-machine stop`: stops the machine. Performs graceful shutdown
+    3. `docker-machine kill`: stops the machine. No graceful shutdown (like pulling power cable)
+    4. `docker-machine start`: starts a stopped machine
+    5. `docker-machine restart`: equiv. to stop and start. Can lead to new IP so old env. variables must be set again
+    6. `docker-machine rm`: removes the machine (both running and stopped with -f flag). -f removes machine config files too.
+    7. `docker-machine status`: shows the current status of the machine
+    8. `docker-machine inspect`: provides a detailed JSON on machine config
+    9. `docker-machine active`: shows the currently active machine name
+    10. `docker-machine env`: shows the currently set env. variables for the "default" machine of the terminal
+
+13. Several machines can be run in parallel each in a separate terminal session (so env. vars can be set)
+
+14. Another way to access the machine by using SSH:
+
+    `docker-machine ssh test-vm`
+    
+15. Even in one terminal, other machines can be accessed. For example, we can used this to see the
+settings for another machine:
+
+    `docker-machine config second-vm`
+    
+    This returns:
+    
+    ```
+    --tlsverify
+    --tlscacert="/home/shabie/.docker/machine/machines/second-vm/ca.pem"
+    --tlscert="/home/shabie/.docker/machine/machines/second-vm/cert.pem"
+    --tlskey="/home/shabie/.docker/machine/machines/second-vm/key.pem"
+    -H=tcp://192.168.99.102:2376
+    ```
+    
+    so these can used as follows. First save it in a variable:
+    
+    `SECONDVM=$(docker-machine config second-vm)`
+    
+    and then lets do a listing of the docker images in this second machine:
+    
+    `docker $SECONDVM image ls`
+    
+16. How does a docker machine create a runtime environment in the VirtualBox scenario:
+
+    * VM is created with an empty Virtual Hard Disk and "boot2docker.iso" CD-ROM image "inserted" in
+    the optical drive
+    * VM boots from this ISO image
+    * Bootprogram creates a "tmpfs" **(a RAM Disk)** (I guess it means temporary filesystem) and copies
+    file from ISO into the RAM Disk
+    * RAM Disk (tmpfs) is then mounted to the root directory of the machine. This means all binaries
+    and config files of machine are in a RAM
+    * The last point means that the changes made through a SSH tunnel in the machine only take place
+    in the RAM
+    * VM's Virtual Hard Disk (a persistent file on the host system) is used to store only selected 
+    subdirs:
+        * /tmp
+        * /var/lib/docker
+        * Other than that the local image cache, container volumes etc. (docker engine relevant data)
+    * RAM Disk and its data exists only until VM stops or restarts
+    * So a simple restart fixes all OS level changes and preserves all images, containers and volumes (held
+    in persistent storage)
+    
+17. A machine upgrade replace "boot2docker.iso" with the latest version from the registry. So the root
+file system is refreshed (newer) but keeps the same persistent storage hence preserving docker images,
+containers and volumes.
+
+18. Let's do an upgrade:
+
+    1. Good practice to list all VMs:
+    
+    `docker-machine ls`
+    
+    2. The command for upgrade:
+    
+    `docker-machine upgrade test-vm`
+    
+    results in this output:
+    
+    ```
+    Waiting for SSH to be available...
+    Detecting the provisioner...
+    Upgrading docker...
+    Stopping machine to do the upgrade...
+    Upgrading machine "test-vm"...
+    Copying /home/shabie/.docker/machine/cache/boot2docker.iso to /home/shabie/.docker/machine/machines/test-vm/boot2docker.iso...
+    Starting machine back up...
+    (test-vm) Check network to re-create if needed...
+    (test-vm) Waiting for an IP...
+    Restarting docker...
+    ```
+    
+    Since the machines restarted we can check if the IPs remained the same else we do the env. var. setup again:
+    
+    `docker-machine ls`
+    
+19. A couple of useful commands:
+
+    *`docker-machine regenerate-certs test-vm` to regenerate all the certificates in case they expire
+    
+    *`docker-machine provision` regenerates certs plus recreate default docker runtime config. This option
+    is more useful if the docker engine on the machine is broken but you don't wanna just remove the whole
+    machine as it also deletes the persistent data.
+    
+20. machines can be made bigger in size i.e. more hardware resources incl cpu-count, memory, disk size etc
+
+21. Containers (running in the machine) must have their exposed ports mapped to the machine ports. So
+it is important to remember we map to machine IP not localhost.
+
+    To find out the IP of the machine, we can do the following:
+    
+    `docker-machine ip test-vm`
+    
+    may return something like `192.168.99.101`
+    
+    So if we were to run a container like this in a terminal setup for a docker machine:
+    
+    `docker run -it -p 5000:5000 shabie/flask_hello:1.0`
+    
+    I can visit the website running in the container inside the machine on my local (host) system using:
+    
+    `192.168.99.101:5000`
