@@ -877,3 +877,5 @@ VM.
     
     Later in section 5, we will discuss how to use AWS Persistent Volumes to ensure data remains safe even if the
     instance is lost.
+
+13. The process for Google Cloud Platform is also very similar so will not be repeated here.
