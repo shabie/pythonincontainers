@@ -51,7 +51,7 @@ which was a name of device allowing you to type text and send it away in the sam
     * `-v` or `--volume` mounts the host system's folder to the container
     * paths should be absolute not relative
 
-    ######Examples:
+    ###### Examples
     `docker run -it -v ${PWD}:/app python`
     `docker run -d -v ${PWD}:/data python`  (`-d` is for detach or daemon i.e. runs it in the background freeing 
     the current session)
@@ -66,7 +66,7 @@ a normal state for a container, when the main process running in it has exited.*
     `docker start -i baby_python` (executing cmd above already saves the starting cmd i.e. `python /app/myfirst.py` into
      the container metadata so it is not needed next time.)
 
-    ######MINOR DETAIL THAT SEEMED IMPORTANT:
+    ###### MINOR DETAIL THAT SEEMED IMPORTANT
     `docker run` by default attaches stdout and stderr so even skipping this flag `-it` shows the print out of python script.
     `docker start` by default attaches nothing so `-i` or `-a` flags are needed where they stand for interactive and attach resp.
 
@@ -182,7 +182,7 @@ Linking**.
 
     In this case also the value is added to the `/etc/hosts/` but the internal IP address must be found out first.
 
-    ######KEY DIFFERENCE BETWEEN `--add-host` `--link`: 
+    ###### KEY DIFFERENCE BETWEEN `--add-host` `--link`
     linking carries over the env. variables over to the container it is being linked to but not in case of `--add-host`.
     The env. variables all start with prefix `<ALIAS>_` (in this case `WEBSERVER_...`)
 
@@ -683,7 +683,7 @@ containers and volumes.
 
 18. Let's do an upgrade:
 
-    1. Good practice to list all VMs:
+    1. Good practice to list all VMs first:
     
     `docker-machine ls`
     
@@ -718,7 +718,7 @@ containers and volumes.
     is more useful if the docker engine on the machine is broken but you don't wanna just remove the whole
     machine as it also deletes the persistent data.
     
-20. machines can be made bigger in size i.e. more hardware resources incl cpu-count, memory, disk size etc
+20. Machines can be made bigger in size i.e. more hardware resources incl cpu-count, memory, disk size etc.
 
 21. Containers (running in the machine) must have their exposed ports mapped to the machine ports. So
 it is important to remember we map to machine IP not localhost.
@@ -736,3 +736,142 @@ it is important to remember we map to machine IP not localhost.
     I can visit the website running in the container inside the machine on my local (host) system using:
     
     `192.168.99.101:5000`
+
+22. Docker machine with Hyper-V is not so cool (stability issues). Besides, what changes is the underlying architecture.
+The docker-machine commands remain the same. So it will not be addressed any further.
+
+## Docker Machine [AWS]
+
+1. Options to pass AWS credentials to the AWS driver of docker-machine:
+
+    * Directly pass the `credentials` file located in `~/.aws/credentials`
+    * Set environment variables:
+        1. `AWS_ACCESS_KEY_ID`
+        2. `AWS_SECRET_ACCESS_KEY`
+    * Pass them as command line options:
+        1. `--amazonec2-access-key  <ID>`
+        2. `--amazonec2-secret-key  <SECRET_KEY>`
+
+2. What is Amazon EC2. Quote from Amazon's own website:
+
+    > Amazon Elastic Compute Cloud (Amazon EC2) is a web service that provides secure, scalable compute capacity in 
+    the cloud
+
+    In short, it is a platform for Virtual Machines. This is simply known as *Virtual Machines* in Azure.
+    
+    Comparison of equivalent services in AWS and Azure can be found 
+    [here](https://docs.microsoft.com/en-us/azure/architecture/aws-professional/services).
+    
+3. Amazon's EC2 VMs are exposed to internet by default.
+    * They get a private IP as well as a public IP.
+    * All inbound ports of the instance are closed to protect it from inbound traffic
+    * Inbound traffic is **only** delivered to ports that are explicitly opened in **Security Groups**.
+
+4. A word on the AWS Security Groups (SG) vs. Azure Network Security Groups (NSG):
+
+    >Both AWS SG and Azure NSG work the same way when applied to an instance (EC2 in AWS, VM in Azure). In Azure's GUI,
+    there is a place where the name of the VM has a shield logo, and clicking on it I can define the inbound and 
+    outbound rules like I would do in AWS Security Groups.
+    >
+    >There is a slightly difference and it's that in Azure you have less control of the traffic, with only three possible
+    options:
+    >
+    >   * Allow Internet
+    >   * Allow Load Balancer to VM
+    >   * Allow between VMs
+    >
+    >By contrast, in AWS you can specifically control which instances can connect to other instances because you can use
+    the Security Group ID as the source/destination of the rules. In Azure, in order to have so fine-grained control, 
+    you need to use the VMs IP, but if you scale up, you need to add more rules to the rule-set with each specific IP, 
+    which is not so much usable in an auto-scaling setup.
+
+5. Above information is important because when we run Docker Runtime in an AWS instance, we need to:
+    
+    1. Make sure we apply Security Groups to the instances opening their ports
+    2. Map the opened ports to the container ports
+    
+    *Docker-machine can use an AWS driver specific option to open the ports.*
+    
+6. Let's create a docker machine on AWS:
+
+   ```console
+   docker-machine create --driver amazonec2 --amazonec2-region eu-west-1 --amazonec2-open-port 5000 aws-machine 
+   ```
+   
+   * `--driver` uses the `amazonec2` driver of Docker Machine
+   * `--amazonec2-region` sets the region (in this case to `eu-west-1`)
+   * `--amazonec2-open-port` opens the port 5000 for incoming traffic. We use this port to map ports exposed by
+   containers running on our machine called `aws-machine`.
+   * Since credentials have not been passed explicitly nor are they set as environment variables, they will be read
+   from the path `~/.aws/credentials`.
+
+    The output looks like this (takes a while but idle times are skipped):
+    
+    [output aws docker machine creation](staticfiles/aws-machine-create.svg)
+
+
+    
+7. Since the machine is not active we can set it to active with the following steps:
+
+    1. `docker-machine env aws-machine` to just have a look at the to-be-set environment variables
+    2. `eval $(docker-machine env aws-machine)` (now the machine is set to active)
+    
+8.  The machine can now be seen directly in AWS portal:
+    
+    ![aws portal ec2](staticfiles/aws-machine-in-portal.png) 
+    
+    The instance type is `t2.micro` which is a general purpose VM with 1 CPU, 1 GB RAM and one 16 GB root disk.
+    
+    The details of the VM can be investigated from the portal.
+    
+    VMs can be made bigger using the following `docker-machine create` options:
+    
+    1. `--amazonec2-instance-type` instance type could be t2.medium, c4.large etc.
+    2. `--amazonec2-root-size` size in GBs could be 200, 300 etc.
+    3. `--amazonec2-volume-type` volume type could be io1 (for the highest performance SSDs) or st1 for (HDDs) etc.
+    
+9. So now we are going to try and run a container on this machine but first we gotta figure out the public IP of this
+VM.
+
+    `docker-machine ip aws-machine` returns the IP address (34.243.93.95) in this case.
+    
+10. Now we run the container:
+
+    ![aws container run](staticfiles/container-run-in-aws.svg)
+    
+    The requests made to the URL `32.243.93.95:5000` from the browser can be seen in the flask server response logs
+    
+    ![request to container](staticfiles/request-to-aws-container.png)
+    
+11. There are cases when you need more ports opened for a machine instance to run more containers on the same machine
+**and it is hard to know in advance how many when creating the machine**.
+
+    Well good news is **ports can be opened without recreating the machine. One of the ways to do this is to create a
+    custom Security Group in AWS console and assign it to a machine instance.**
+    
+    Here are the steps:
+    
+    1. First create the security group:
+    ![create security group](staticfiles/create-security-group.png)
+    
+    2. Select the VM and find the option to change the security group:
+    ![menu to change security group](staticfiles/menu-to-change-security-group-vm.png)
+    
+    3. Select the groups to apply to the machine:
+    ![select the security group popup](staticfiles/security-group-change-popup.png)
+
+12. Let's remove the machine. All running containers as well all the data in the machine is destroyed:
+
+    `docker-machine rm aws-machine`
+    
+    Asks for confirmation:
+    
+    ```
+    About to remove aws-machine
+    WARNING: This action will delete both local reference and remote instance.
+    Are you sure? (y/n): y
+    Successfully removed aws-machine
+    ```
+    
+    Later in section 5, we will discuss how to use AWS Persistent Volumes to ensure data remains safe even if the
+    instance is lost.
