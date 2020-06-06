@@ -531,6 +531,8 @@ point but I am not sure how to use it.
     Docker is up and running!
     To see how to connect your Docker Client to the Docker Engine running on this virtual machine, run: docker-machine env test-vm
     ```
+   
+   ![docker machine create virtualbox](staticfiles/create-docker-machine-virtualbox.svg)
     
     * `docker-machine env test-vm` connects the docker client to the new VM
     
