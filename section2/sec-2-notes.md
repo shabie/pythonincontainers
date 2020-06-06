@@ -610,7 +610,7 @@ in a headless mode i.e. with its own interface (console and GUI).
     
     The key settings of the VM can be viewed in the VirtualBox Manager:
     
-    ![vm-details-docker-machine](docker-machine-vm-details.png)
+    ![vm-details-docker-machine](staticfiles/docker-machine-vm-details.png)
     
 11. Don't forget to manage docker machines with `docker-machine` command only since docker maintains internally a
 state of each VM.
@@ -807,7 +807,7 @@ The docker-machine commands remain the same. So it will not be addressed any fur
 
     The output looks like this (takes a while but idle times are skipped):
     
-    [output aws docker machine creation](staticfiles/aws-machine-create.svg)
+    ![output aws docker machine creation](staticfiles/aws-machine-create.svg)
 
 
     
