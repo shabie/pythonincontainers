@@ -1,0 +1,11 @@
+# Instructions
+
+1. First type this to start recording:
+
+	`asciinema rec <filename>.cast`
+
+2. Use the custom defined function to convert it to SVG:
+
+	`cast_to_svg <filename>.cast  <out_filename>.svg
+
+
