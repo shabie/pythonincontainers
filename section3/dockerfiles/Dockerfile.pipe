@@ -1,0 +1,2 @@
+FROM python
+RUN find / -name "python*" | wc -l

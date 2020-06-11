@@ -1,0 +1,4 @@
+FROM python
+RUN echo "This is multiline" > /tmp/file
+RUN echo "message" >> /tmp/file
+RUN more /tmp/file

@@ -447,13 +447,14 @@ to this ARG. Will be covered later. ARG parameterizes the Dockerfile.
     - `COPY --chown=web:web html/ /usr/local/html/`
     - `COPY --chown=root . .`
     - `COPY --chown=100:100 hello.py /app/`
-    
+ 
+    What each means:
     1. `html` folder copied. Each file within the copied folder has "web" as the owner and "web" as the group.
     2. entire context is copied. Everything belongs to root.
     3. `hello.py` is copied and owned by user with ID 100 and a group with ID 100.
     
     The user IDs and user groups are maintained using `/etc/passwd` and `/etc/group` and if these don't exist, the
-    build aborts.
+    build aborts with an error.
     
 15. `ADD` is very similar to `COPY` with the exception of one: it can two more types of sources
 
@@ -463,6 +464,251 @@ to this ARG. Will be covered later. ARG parameterizes the Dockerfile.
     
     Other than this, ADD works like COPY but docker recommendation is for COPY since the word is more transparent.
     
-16. 
+16. A side point. Paths other than the current folder can also be used as context. Such paths can both be relative
+or absolute. Dockerfile must be part of the context. Hell, even a url can be used:
+
+    `docker build -t flask-hello https://github.com/pythonincontainers/flask-hello.git`
     
+    The context can also be a TAR Archive, which gets uncompressed before being used as context with Docker Build.
+
+17. `RUN` is used to execute commands in the **intermediate container** not the final one. It has two forms:
+
+    1. `RUN command arg1 arg2`
+    2. `RUN ["command", "arg1", "arg2"]`
     
+    The first one runs the command with a shell. Shell msut be available already. `/bin/sh -c` for linux images
+    and `cmd /S /C` for windows images.
+    
+    The second one is of the form `docker exec`. It takes a JSON array with the first array element being the executable
+    command and the others being the arguments.
+    
+    `RUN` only takes non-interactive commands. Attempting to take user input leads to build failure.
+    
+    The shell form provides a lot of flexibility. Here are some example of redirects we can take advantage of:
+    
+    ```
+    FROM python
+    RUN echo "This is multiline" > /tmp/file
+    RUN echo "message" >> /tmp/file
+    RUN more /tmp/file
+    ```
+    
+    The build output snippet will look like this:
+    
+    ```shell
+    Step 2/4 : RUN echo "This is multiline" > /tmp/file
+     ---> Running in ba930fb526a3
+    Removing intermediate container ba930fb526a3
+     ---> 7e0515e6dbcb
+    Step 3/4 : RUN echo "message" >> /tmp/file
+     ---> Running in 3ac3d51d1a06
+    Removing intermediate container 3ac3d51d1a06
+     ---> 105457f45b97
+    Step 4/4 : RUN more /tmp/file
+     ---> Running in 2537188affc4
+    ::::::::::::::
+    /tmp/file
+    ::::::::::::::
+    This is multiline
+    message
+    ```
+    
+    Here's another one:
+    ```
+    FROM python
+    RUN find / -name "python*" | wc -l
+    ```
+    
+    This is how to output looks like:
+    
+    ```
+    shabie:~/Projects/containers/section3/dockerfile-run(master)$ docker build -t pip -f Dockerfile.pipe .
+    Sending build context to Docker daemon  3.072kB
+    Step 1/2 : FROM python
+     ---> 659f826fabf4
+    Step 2/2 : RUN find / -name "python*" | wc -l
+     ---> Running in e47ec334b082
+    148
+    Removing intermediate container e47ec334b082
+     ---> e9d88af938a0
+    Successfully built e9d88af938a0
+    Successfully tagged pip:latest
+    ```
+    
+    A fine point is that pipe command works in such a way that commands before the last pipe are executed in a separate
+    shell process, and the last one in the current shell. Build continues if the last command i.e. the command executed
+    in the current shell exits with error 0 even if the prior commands in the piped chain fail.
+    
+    Bash allows error propagation but standard shell does not. So if you wanna set bash instead of standard shell, here
+    is the line to add in Dockerfile:
+    
+    **`SHELL ["/bin/bash", "-c"]`**
+    
+    Hell, we can even do this in a Dockerfile i.e. set python as default executor of RUN:
+    
+    ```
+    FROM python
+    SHELL ["/usr/local/bin/python", "-c"]
+    RUN print("Hello at build time")
+    ```
+    
+    So the output snippet:
+    
+    ```
+    Step 2/3 : SHELL ["/usr/local/bin/python", "-c"]
+     ---> Running in 318b073a9ba7
+    Removing intermediate container 318b073a9ba7
+     ---> 0392b8a938b8
+    Step 3/3 : RUN print("Hello at build time")
+     ---> Running in d984a320c3ac
+    Hello at build time
+    ```
+   
+    One thing to remember: each RUN is executed in a different intermediate container. A consequence of this is that
+    this won't work as expected:
+    
+    ```
+    FROM python
+    RUN export VAR=foo
+    RUN echo $VAR
+    ```
+    
+    This won't work because the VAR environment variable was set in another container not accessible to the shell
+    executing the echo part. (It is a different story if the env. vars. were set using ENV).
+    
+    Shell variables like `$VAR` etc. are only to be used in the shell form. JSON array form does not resolve them.
+    
+    Note: Running background processes of shell don't work well during build. Because they spawn new processes for which
+    docker build doesn't wait.
+    
+    `RUN` is used to install software or download data and config files from external servers. This is its most common
+    **usage pattern**.
+    
+    ```
+    FROM python
+    RUN apt-get update && apt-get install -y default-mysql-client
+    RUN mysql --version
+    RUN pip install Django mysqlcleint
+    ```
+    
+18. A word on image layers. Every line of `COPY`, `ADD` and `RUN` leads to a new layer of filesystem which the docker
+build also saves in its image cache.
+
+    Why store it in cache? So it can be used again when it is being rebuilt. Re-building the exact container, lines
+    like these can be seen:
+    
+    ```
+   Step 2/3 : SHELL ["/usr/local/bin/python", "-c"]
+     ---> Using cache
+     ---> 0392b8a938b8
+    Step 3/3 : RUN print("Hello at build time")
+     ---> Using cache
+     ---> c80b8d3364e9
+    Successfully built c80b8d3364e9
+    ```
+    
+    So it is recommended to pack group all logical RUN commands into one. Here is an example:
+    
+   ```
+    FROM python
+    RUN apt-get update && apt-get install -y default-mysql-client
+    RUN pip install Django mysqlcleint pandas numpy
+    ``` 
+   
+    So the side effect is that when no linux installations are changed, the cached image will be reused. Same goes
+    for python libraries. If the libraries are the same, this step completes very quickly when re-building the image
+    in the future. Of course we can use the `requirements.txt` to the same effect.
+    
+19. Now we discuss modification of new image metadata. Let's start with `ENV` command.
+
+    Image Metadata contains the list of environment variables. They are available to all subsequent Dockerfile commands
+    as well as obviously the container(s) based on the final image of that Dockerfile.
+    
+    `ENV` can be defined in two ways:
+    
+    1. `ENV name value`
+    2. `ENV name1=value1 name2=value2 ...`
+    
+    `ENV` also allows variable substitution. Here's a classic example of appending path:
+    
+    `ENV PATH $PATH:/app`
+    
+    Since paths in `PATH` are separated by `:`, it takes the old value of `PATH` variables and appends `:/app` to it.
+    
+    The downside of the `ENV PATH $PATH:/app` is that if `PATH` is empty, `:/app` gets appended which is incorrect.
+    
+    Solution to this? Use BASH brace syntax with 2 modifiers (the only 2 allowed) since they are supported by Docker 
+    Interpreter.
+    
+    Q. What is brace syntax?
+    
+    `echo a{d,c,b}e` outputs `ade ace abe`. This is brace syntax.
+    
+    Q. What are modifiers and which ones are supported?
+    
+    * `${parameter:-word}`
+      If parameter is unset or null, the expansion of word is substituted. Otherwise, the value of parameter is 
+      substituted.
+     
+    * `${parameter:+word}`
+      If parameter is null or unset, nothing is substituted, otherwise the expansion of word is substituted.
+    
+    Here are two examples:
+    
+    1. `ENV PATH "${PATH}${PATH:-/bin}:/app"` this renders `PATH` to `/bin:/app` if PATH is empty or unset.
+    2. `ENV PATH "${PATH}${PATH:+:}/app"` this renders `PATH` to `/app` if PATH is empty or unset.
+    
+    Environment variables cannot be unset in Dockerfile. They can be set to empty string `ENV EMPTY ""`. Unset or
+    empty string are for most practical purposes equivalent.
+    
+    Env. vars can be altered or set when running a container using the `--env` or `-e` flag and then using `var=value`
+    format. Several variables setting means using `-e` flag several times.
+    
+19. Linux base images lack user authentication system. This means commands in containers are executed with superuser
+privileges by default. This applies to the build process as well. All commands are executed with superuser powers
+as well. 
+
+    Some need root access like `RUN apt-get install ...` but others don't.
+    
+    `USER` command changes the user to the provided User ID. This setting then applies to all subsequent commands as
+    well as the start command. Let's try this. Here's a Dockerfile:
+    
+    ```
+    FROM python
+    RUN groupadd mysqlgrp && useradd -g mysqlgrp mysql
+    USER mysql
+    RUN id
+    ```
+    
+    The 2nd command first adds a group called `mysqlgrp` and then adds the user `mysql` to the group. The `-g` flag just
+    passes the name of the group that must already exist. Building the image outputs this:
+    
+    ```
+    Step 4/4 : RUN id
+    ---> Running in 9e518458c7be
+    uid=1000(mysql) gid=1000(mysqlgrp) groups=1000(mysqlgrp)
+    ```
+    
+    We can even later run a container based on the image to see the output of command `id`:
+    
+    ```shell
+    shabie:~$ docker run --rm user id
+    uid=1000(mysql) gid=1000(mysqlgrp) groups=1000(mysqlgrp)
+    ```
+    
+    Finally, `USER mysql:root` changes the group of the ID from `mysql` to now `root`.
+    
+20. `LABEL` -> container can have arbitrary number of labels. Labels themselves are not mandatory.
+
+    Example dockerfile with multiple labels:
+    ```
+    FROM python
+    LABEL maintainer=shabie@whatever.com
+    LABEL com.mycompany.version="0.7"
+    LABEL com.mycompany.production="true"
+    ```
+    
+    The labels can be seen through `docker inspect` and can also be used as filter as follows:
+    
+    * `docker images --filter "label=com.mycompany.production"` which just uses a part of it    
+    * `docker images --filter "label=com.mycompany.production=true"` which uses all of it
