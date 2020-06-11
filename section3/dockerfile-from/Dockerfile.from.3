@@ -1,0 +1,7 @@
+# multiple from commands. Used like this the first two base image builds are thrown away
+# only the last one "FROM python" is used
+# But they can be used sensibly to get stuff from earlier builds (of alpine or ubuntu)
+# They are called "multi-stage builds"
+FROM alpine
+FROM ubunut:16.04
+FROM python
