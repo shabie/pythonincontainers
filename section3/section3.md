@@ -578,6 +578,7 @@ or absolute. Dockerfile must be part of the context. Hell, even a url can be use
     
     Shell variables like `$VAR` etc. are only to be used in the shell form. JSON array form does not resolve them.
     
+    :warning:
     Note: Running background processes of shell don't work well during build. Because they spawn new processes for which
     docker build doesn't wait.
     
@@ -720,4 +721,345 @@ as well.
     * `docker images --filter "label=com.mycompany.production"` which just uses a part of it    
     * `docker images --filter "label=com.mycompany.production=true"` which uses all of it
 
-21. 
+21. `VOLUME` defines mountpoints in the provided paths. 
+
+    Q. What are mountpoints? 
+    
+    Generally speaking, in linux, there are no drives like `C:`, `D:` etc. There is only one called `root` accessible
+    by `/`. So this means that in order to make the new filesystems (of USB sticks, memory cards, CDs etc.) available,
+    a path must be chosen from where the contents can be accessed.
+    
+    This path is a directory (hence mountpoint is a dir) and without the mounted device, it is normally empty.
+    
+    In context of Dockerfile, mountpoints are also "directories" but with a twist. If a container is started without
+    volumes (created with `docker volume create ...` or the bind-mounts), the docker runtime creates an anonymous
+    volume and mounts it at each of those mountpoint(s) defined in `Dockerfile` of the image. More on this later.
+    
+    Here's how `VOLUME` can be used in a Dockerfile:
+    
+    ```
+    VOLUME /data
+    VOLUME ["data"]
+    VOLUME /web /static
+    ```
+    
+    Three different ways to mount a Volume. The first and the 3rd one are basically the same. The 2nd one is the JSON
+    array format.
+    
+    Q. Why use Volumes?
+    
+    1. Performance: containers are read-only with a thin write layer that is not efficient at storing data
+    2. Persistency: Data must be able to survive container loss
+    3. Stateless and Disposable Containers: Keep containers read-only (stateless) and disposable
+    
+    Example:
+    ```
+    FROM python
+    VOLUME /data
+    COPY hello.py /data/
+    ```
+    
+    The best way to run such an image container is as follows:
+    
+    1. `docker volume create data` - create a volume
+    2. `docker run -it -v data:/data vol bash`
+    3. now we are inside the container: `ls data` will list the items and `hello.py` can be seen.
+    
+    :fire: This is an interesting interaction of Dockerfile and Volumes. From the experiment above it seems as though
+    the `COPY` line of the Dockerfile is executed when a container is created (as opposed to when an image is created).
+    
+    Let's do one more test. Let's modify `hello.py` and rename it to `hello.old`.
+    
+    ```
+    root@99a713f1743d:/# mv hello.py hello.old
+    root@99a713f1743d:/# echo "One more line" >> hello.old
+    root@99a713f1743d:/# cat hello.old
+    
+    from flask import Flask, request, escape
+    app = Flask(__name__)
+
+    @app.route("/")
+    def hello():
+        name = request.args.get("name", "World")
+        return f"Hello, {escape(name)}! Greetings from a Container"
+
+    One more line
+    ```
+    
+    We exit the container and remove it completely.
+    
+    `docker container rm vol`
+    
+    The data volume `data` is still there.
+    
+    Now we mount the same volume to another container:
+    
+    `docker run -it --rm -v data:/mnt alpine`
+    
+    We are still able to find out `hello.old`. We create another file at that mountpoint i.e. in that volume:
+    
+    `echo "Surprise!" > another-file.txt`
+    
+    and exit the alpine container.
+    
+    We re-create the `vol` container and mount the (current state) of `data` volume:
+    
+    `docker run -it --name vol -v data:/data vol bash`
+    
+    and voila! both files can be seen:
+    
+    ```
+    root@eae9a07c5146:/# cd data
+    root@eae9a07c5146:/data# ls
+    another-file.txt  hello.old
+    ```
+    
+    >Here is the crux of experiment: The first time we mounted the `data` volume, the volume got *initialized*
+    with `hello.py` but not the second time even though there was no file called `hello.py` in the volume.
+    >
+    >So every time we attach an **empty volume** volume, it gets initialized. If we delete all the contents
+    in the `data` volume and re-mount it. It gets initialized *again*.
+
+    Q. What if we forget the `-v` option when running a container based on image `vol`?
+    
+    The container will be created and the mountpoint `/data` will be mounted by a newly created volume with an anonymous
+    volume (it has a name but it is the very long and ugly sha256 digest).
+    
+    This newly created volume cannot be renamed (may be changes later).
+    
+    :warning: using the `--rm` option with `docker run` not only removes the container but **also the  anonymous 
+    volume NOT the named volume** when the container is exited. This is equivalent to doing this:
+    
+    So far we've seen docker volumes being mounted. Folders from the host can also be "bind-mounted". Here's an example:
+    
+    `docker run -it --name vol ${PWD}/temp:/data vol bash`
+    
+    Of course, in such a case, the folder empty or not, **is not initialized**.
+    
+    Here's a final quirk of `VOLUME`. Take this example:
+    
+    ```
+    FROM python
+    COPY start-app.sh /data/
+    RUN echo "One more line" >> /data/start-app.sh
+    VOLUME /data
+    COPY hello.py /data/
+    Run "One more line" >> /data/hello.py
+    RUN cat /data/start-app.sh
+    RUN cat /data/hello.py
+    ```
+    
+    In the above example, both `hello.py` and `start-app.sh` land in the `/data` volume. This means `VOLUME` command
+    placed anywhere in the Dockerfile, allows files and directories to be added under the mount point by command(s)
+    placed before and after the the `VOLUME` declaration.
+    
+    :warning: Any Dockerfile command place **before** the `VOLUME` command can update files under the future mount point
+    but a command after the `VOLUME` line cannot. That is why "One more line" gets appended to `start-app.sh` but not to
+    `hello.py`.
+     
+22. `EXPOSE` command declares use of ports for external communication. The purpose of this keyword is documentation. It
+does not actually open ports!
+
+    It can be used in two forms:
+
+    1. `EXPOSE <port>`
+    2. `EXPOSE <port>/<protocol>`
+    
+    Examples:
+    
+    1. `EXPOSE 22/tcp` and `EXPOSE 1234/udp` declare that a container running the image would like to have these ports
+    exposed for TCP-only or UDP-only ingest traffic.
+    2. `EXPOSE 80 443` declare that a container would like to have the two ports for ingest traffic of any protocol.
+    
+    :fire: Actual port mappings happen at Runtime, not Build time.
+    
+    Hence, ports can be mapped regardless of `EXPOSE` declarations in Dockerfile and in image metadata.
+    
+    The only way the `EXPOSE` has an effect is if the container is run with the **capital P** `-P` flag which stands for
+    `--publish-all`. In this case, the container ports are indeed exposed to the next available free port on the host 
+    (say 32678 or whatever).
+    
+    The port the container actually gets, can be seen using `docker container ls`.
+    
+23. Now for the startup commands for the containers. It is a combination of:
+
+    1. `ENTRYPOINT` - defines the command to run
+    2. `CMD` - defines the argument to be used
+    
+    Final startup command is a union of both.
+    
+    They are executed each time a container is started. Both can be changed i.e. overridden at runtime.
+    
+    Here's a simple example of `Dockerfile`:
+    
+    ```
+    FROM python
+    ENTRYPOINT ["python"]
+    CMD ["--version"]
+    ```
+    
+    Inspecting the image we can see the following:
+    
+    ```
+    "Cmd": [
+        "--version"
+    ],
+    ...
+    "Entrypoint": [
+        "python"
+    ],
+    ```
+    
+    Running the image with `docker run --rm simple` prints `Python 3.8.3`.
+    
+    `ENTRYPOINT` is often left empty and commands are put in `CMD`. This is true specially for popular public images
+    including those of Python in Dockerhub.
+    
+    In case of multiple `ENTRYPOINT` and `CMD` declarations in a Dockerfile, each of the last one prevails. Furthermore,
+    if only `CMD` is defined in the Dockerfile, the `ENTRYPOINT` of the base image is inherited.
+    
+    `--entrypoint` is used to override `ENTRYPOINT` and takes one argument which is a binary in the `PATH` variable
+    or a full path of the binary in the container.
+    
+    So here's a recipe to get a shell prompt in any image that has a shell:
+    
+    `docker run --rm -it --entrypoint="" <image-name> /bin/sh`
+    
+    So basically nullify the `ENTRYPOINT` and run a `CMD` of our choosing (in this case `/bin/sh`).
+    
+    The `CMD` can be defined in basically 2 forms (according to the docs in 3 forms):
+    
+    1. `CMD python args.py one two` (shell form so the prefix `/bin/sh -c` is added)
+    2. `CMD ["/bin/sh", "-c", "python args.py one two"`] (JSON array or exec form)
+    
+    If we run the 1. type and inspect is closely (using the python script `args.py` that does that) we see this output:
+    
+    ```
+    This process PID is:  6
+    This process executable is:  /usr/local/bin/python3.8
+    This process sys.argv is:  ['args.py', 'one', 'two']
+    This process command line is:  ['python', 'args.py', 'one', 'two']
+    List of all processes in the current Container:
+    PID= 1  PPID= 0  CMDLINE= ['/bin/sh', '-c', 'python args.py one two']
+    PID= 6  PPID= 1  CMDLINE= ['python', 'args.py', 'one', 'two']
+    ```
+    
+    It can be seen above that the parent process is still that of shell `/bin/sh -c` and the child process is of python.
+    PID = Process ID, PPDID = Parent Process ID.
+    
+    If using the shell form, it is suitable to only use one of the `ENTRYPOINT` or `CMD`. Both leads to problems because
+    of the way the `-c` flag handles the subsequent arguments (by ignoring them).
+    
+24. Signals can be sent to the process running in the container but the signals are only PID=1. Linux does not forward
+signals to child processes. Signals are a useful form of asynchronous event notification tool for containers. 
+
+    :exclamation: So in order to send signals to your primary process, the `CMD` or `ENTRYPOINT` should be written in 
+    the **exec form** NOT the shell form. Because that is the way they will run in PID=1 and not a child process.
+
+    A useful example of signals is the NGINX server that reloads the config if `SIGHUP` signal is sent.
+    
+    A signal can be sent to a container using `docker kill -s SIGHUP <container-name>`.
+    
+25. `ARG` is used to parameterize Dockerfile.
+
+    `docker build` has a `--build-arg` that can alter / supply value for the build.
+    
+    `ARG Python_Image_Name=python` for example allows for passing the passing the parameter `Python_Image_Name` with
+    an argument and if none is provided the default `python` is used.
+    
+    Here's a full example of how the variable can be referenced with the Dockerfile:
+    
+    ```
+    ARG Python_Image_Name=python
+    ARG Python_Image_Tag=latest
+    FROM $Python_Image_Name:$Python_Image_Tag
+    ARG Flask_Ver=1.0.2
+    RUN pip install flask==$Flask_Ver
+    WORKDIR /app
+    COPY hello-v2.py .
+    CMD ["python","hello-v2.py"]
+    ```
+    
+    :warning: variables defined with `ARG` instruction exist only during the Build time and are NOT written into the
+    image metadata. Hence, they are not available in the final image.
+    
+    Now we can do this:
+    
+    `docker build -t <image-name> --build-arg Flask_Ver=1.0.0 --build-arg Python_Image_Tag=slim .`
+    
+    This uses two of the parameters different from the defaults: the flask version and the python slim.
+    
+    Since information about the `ARG` is not available in the metadata, a way to get around this problem is to save
+    variables using `ENV` tag that *are* available in the metadata. Here's an example of such a Dockerfile.
+    
+    ```
+    ARG Python_Image_Name=python
+    ARG Python_Image_Tag=latest
+    FROM $Python_Image_Name:$Python_Image_Tag
+    ARG Flask_Ver=1.0.2
+    ARG Python_Image_Name=python
+    ARG Python_Image_Tag=latest
+    ENV PYTHON_IMAGE_NAME $Python_Image_Name
+    ENV PYTHON_IMAGE_TAG $Python_Image_Tag
+    ENV FLASK_VER $Flask_Ver
+    RUN pip install flask==$Flask_Ver
+    WORKDIR /app
+    COPY hello-v2.py .
+    CMD ["python","hello-v2.py"]
+    ```
+    
+    :warning: why are 2 of the `ARG` variables repeated twice in the Dockerfile above? It is due to their scope. They
+    are wiped out by the `FROM` instruction and must hence be redefined.
+    
+    `--build-arg` sets all occurrences of the variable declaration.
+    
+    `ARG` variable values can be used with:
+        1. `FROM`
+        2. `RUN`
+        3. `ENV`
+        4. `COPY`
+        5. `ADD`
+        6. `EXPOSE`
+        7. `LABEL`
+        8. `STOPSIGNAL`
+        9. `USER`
+        10. `VOLUME`
+        11. `WORKDIR`
+        
+    But NOT with:
+        1. `ENTRYPOINT`
+        2. `CMD`
+        
+    If we want to use the last 2 with `ARG`, we could store the values first in `ENV` and use a script that access the 
+    env. vars.
+    
+    Import `ARG` values, specially if they tell something about the image, more than being important at runtime,
+    should be part of the label. Here's an example:
+    
+    ```
+    ARG Python_Image_Name=python
+    ARG Python_Image_Tag=latest
+    FROM $Python_Image_Name:$Python_Image_Tag
+    ARG Flask_Ver=1.0.2
+    ARG Python_Image_Name=python
+    ARG Python_Image_Tag=latest
+    ENV PYTHON_IMAGE_NAME $Python_Image_Name
+    ENV PYTHON_IMAGE_TAG $Python_Image_Tag
+    ENV FLASK_VER $Flask_Ver
+    RUN pip install flask==$Flask_Ver
+    WORKDIR /app
+    COPY hello-v2.py .
+    CMD ["python","hello-v2.py"]
+    LABEL com.mycompany.image-name $Python_Image_Name
+    LABEL com.mycompany.image-tag $Python_Image_Tag
+    LABEL com.mycompany.python.flask-ver $Flask_Ver
+    LABEL com.mycompany.maintainer kris@mycompany.com
+    LABEL com.mycompany.source-repo dockerfile-ag
+    ```
+    
+    Clean labeling makes the images easier to find specially when vulnerabilities in certain base images are discovered
+    and they all must be adjusted. Labels make this kind of work a breeze and highly automated.
+    
+26. Creating reusable images.
+
+27.

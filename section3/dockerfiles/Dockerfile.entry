@@ -1,0 +1,3 @@
+FROM python
+ENTRYPOINT ["python"]
+CMD ["--version"]

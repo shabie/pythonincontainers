@@ -1,0 +1,3 @@
+FROM python
+VOLUME /data
+COPY hello.py /data/
