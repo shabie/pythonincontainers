@@ -598,18 +598,18 @@ build also saves in its image cache.
     like these can be seen:
     
     ```
-   Step 2/3 : SHELL ["/usr/local/bin/python", "-c"]
-     ---> Using cache
-     ---> 0392b8a938b8
+    Step 2/3 : SHELL ["/usr/local/bin/python", "-c"]
+    ---> Using cache
+    ---> 0392b8a938b8
     Step 3/3 : RUN print("Hello at build time")
-     ---> Using cache
-     ---> c80b8d3364e9
+    ---> Using cache
+    ---> c80b8d3364e9
     Successfully built c80b8d3364e9
     ```
     
     So it is recommended to pack group all logical RUN commands into one. Here is an example:
     
-   ```
+    ```
     FROM python
     RUN apt-get update && apt-get install -y default-mysql-client
     RUN pip install Django mysqlcleint pandas numpy
@@ -618,6 +618,10 @@ build also saves in its image cache.
     So the side effect is that when no linux installations are changed, the cached image will be reused. Same goes
     for python libraries. If the libraries are the same, this step completes very quickly when re-building the image
     in the future. Of course we can use the `requirements.txt` to the same effect.
+    
+    If you however would not like to use the cache for some reason you can do:
+    
+    `docker build --no-cache ...`
     
 19. Now we discuss modification of new image metadata. Let's start with `ENV` command.
 
@@ -642,9 +646,11 @@ build also saves in its image cache.
     
     Q. What is brace syntax?
     
-    `echo a{d,c,b}e` outputs `ade ace abe`. This is brace syntax.
+    `echo a{d,c,b}e` outputs `ade ace abe`. This is brace syntax. As is `${PWD}` expansion.
     
     Q. What are modifiers and which ones are supported?
+    
+    Modifiers are an extension of parameter expansion. These two are supported:
     
     * `${parameter:-word}`
       If parameter is unset or null, the expansion of word is substituted. Otherwise, the value of parameter is 
@@ -701,6 +707,7 @@ as well.
 20. `LABEL` -> container can have arbitrary number of labels. Labels themselves are not mandatory.
 
     Example dockerfile with multiple labels:
+
     ```
     FROM python
     LABEL maintainer=shabie@whatever.com
@@ -712,3 +719,5 @@ as well.
     
     * `docker images --filter "label=com.mycompany.production"` which just uses a part of it    
     * `docker images --filter "label=com.mycompany.production=true"` which uses all of it
+
+21. 
