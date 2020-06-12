@@ -765,7 +765,7 @@ as well.
     2. `docker run -it -v data:/data vol bash`
     3. now we are inside the container: `ls data` will list the items and `hello.py` can be seen.
     
-    :fire: This is an interesting interaction of Dockerfile and Volumes. From the experiment above it seems as though
+    :fire:  This is an interesting interaction of Dockerfile and Volumes. From the experiment above it seems as though
     the `COPY` line of the Dockerfile is executed when a container is created (as opposed to when an image is created).
     
     Let's do one more test. Let's modify `hello.py` and rename it to `hello.old`.
@@ -827,7 +827,7 @@ as well.
     
     This newly created volume cannot be renamed (may be changes later).
     
-    :warning: using the `--rm` option with `docker run` not only removes the container but **also the  anonymous 
+    :warning:  using the `--rm` option with `docker run` not only removes the container but **also the  anonymous 
     volume NOT the named volume** when the container is exited. This is equivalent to doing this:
     
     So far we've seen docker volumes being mounted. Folders from the host can also be "bind-mounted". Here's an example:
@@ -853,7 +853,7 @@ as well.
     placed anywhere in the Dockerfile, allows files and directories to be added under the mount point by command(s)
     placed before and after the the `VOLUME` declaration.
     
-    :warning: Any Dockerfile command place **before** the `VOLUME` command can update files under the future mount point
+    :warning:  Any Dockerfile command place **before** the `VOLUME` command can update files under the future mount point
     but a command after the `VOLUME` line cannot. That is why "One more line" gets appended to `start-app.sh` but not to
     `hello.py`.
      
@@ -871,7 +871,7 @@ does not actually open ports!
     exposed for TCP-only or UDP-only ingest traffic.
     2. `EXPOSE 80 443` declare that a container would like to have the two ports for ingest traffic of any protocol.
     
-    :fire: Actual port mappings happen at Runtime, not Build time.
+    :fire:  Actual port mappings happen at Runtime, not Build time.
     
     Hence, ports can be mapped regardless of `EXPOSE` declarations in Dockerfile and in image metadata.
     
@@ -980,7 +980,7 @@ signals to child processes. Signals are a useful form of asynchronous event noti
     CMD ["python","hello-v2.py"]
     ```
     
-    :warning: variables defined with `ARG` instruction exist only during the Build time and are NOT written into the
+    :warning:  variables defined with `ARG` instruction exist only during the Build time and are NOT written into the
     image metadata. Hence, they are not available in the final image.
     
     Now we can do this:
@@ -1008,7 +1008,7 @@ signals to child processes. Signals are a useful form of asynchronous event noti
     CMD ["python","hello-v2.py"]
     ```
     
-    :warning: why are 2 of the `ARG` variables repeated twice in the Dockerfile above? It is due to their scope. They
+    :warning:  why are 2 of the `ARG` variables repeated twice in the Dockerfile above? It is due to their scope. They
     are wiped out by the `FROM` instruction and must hence be redefined.
     
     `--build-arg` sets all occurrences of the variable declaration.
