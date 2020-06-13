@@ -242,7 +242,7 @@
             
             and voila! it works!
             
-        13. So we had to execute the shell script myself. How to automatically execute it when the
+        13. So we had to execute the shell script ourselves. How to automatically execute it when the
         container starts?
         
             `docker commit --change "CMD /app/start-app.sh" manual manual-image:1.0`
@@ -828,7 +828,7 @@ as well.
     This newly created volume cannot be renamed (may be changes later).
     
     :warning:  using the `--rm` option with `docker run` not only removes the container but **also the  anonymous 
-    volume NOT the named volume** when the container is exited. This is equivalent to doing this:
+    volume NOT the named volume** when the container is exited.
     
     So far we've seen docker volumes being mounted. Folders from the host can also be "bind-mounted". Here's an example:
     
@@ -960,7 +960,8 @@ signals to child processes. Signals are a useful form of asynchronous event noti
     
     A signal can be sent to a container using `docker kill -s SIGHUP <container-name>`.
     
-25. `ARG` is used to parameterize Dockerfile.
+25. `ARG` is used to parameterize Dockerfile. Both `ARG` and `ENV` are accessible using the dollar notation from
+within the Dockerfile. They seem almost identical. Except that `ENV` value can't be set from the command line.
 
     `docker build` has a `--build-arg` that can alter / supply value for the build.
     
@@ -1062,4 +1063,70 @@ signals to child processes. Signals are a useful form of asynchronous event noti
     
 26. Creating reusable images.
 
-27.
+    Configuration of images and containers can be done using **environment variables** and **config files**.
+
+    pythonincontainers/resuable is an interesting repo to understand the options together with the
+    video called [Building and Running Reusable Images](https://www.udemy.com/course/python-in-containers/learn/lecture/15930736#content).
+    
+27. There is always the question of how much we want to do at build time vs. run time.
+
+    Here are a few examples. Dockerfile below starts a Django app but most of the initalization like DB creation,
+    admin user creation, migration etc. is done at runtime:
+    
+    ```
+    FROM python:3.7.3
+    WORKDIR /django-mysite
+    COPY . .
+    CMD ["/bin/bash", "run-server.sh"]
+    ```
+    
+    This is how the `run-server.sh` looks like:
+    
+    ```shell
+    # Install Python Libraries from requirements.txt
+    pip install -r requirements.txt
+
+    # Create /data directory to store sqlite3 data files
+    mkdir -p /data
+
+    # Initialize Database
+    python manage.py migrate
+
+    # Create 'admin' User
+    /bin/bash create-admin.sh
+
+    python manage.py runserver 0.0.0.0:8000
+    ```
+    
+    and finally the `create-admin.sh`:
+    
+    ```
+    #! /bin/bash
+    # Create 'admin' User
+    echo "from django.contrib.auth.models import User; User.objects.create_superuser('admin', 'admin@example.com', 'admin')" | python manage.py shell
+    ```
+    
+    Here's the demo. The container startup is kind of long:
+    
+    ![django runtime startup](staticfiles/django-runtime.svg)
+    
+    So here is another approach. Packing all of this into an image so it boots much faster and serves still all the same
+    goodies. Here's the Dockerfile for that:
+    
+    ```
+    FROM python:3.7.3
+    WORKDIR /django-mysite
+    COPY . .
+    ARG DJANGO_VER=2.2.1
+    RUN pip install -r requirements.txt
+    RUN mkdir -p /data && python manage.py migrate
+    RUN bash create-admin.sh
+    VOLUME /data
+    CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    ```
+    
+    This basically does everything at the build time and saves everything within the image that gets copied into the
+    (empty) volume that gets mounted when a container is run. This would include copying the initialized SQLite DB
+    into the `/data` mountpoint.
+    
+28. 
