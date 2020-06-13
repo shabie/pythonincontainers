@@ -1125,4 +1125,132 @@ within the Dockerfile. They seem almost identical. Except that `ENV` value can't
     (empty) volume that gets mounted when a container is run. This would include copying the initialized SQLite DB
     into the `/data` mountpoint.
     
-28. 
+28. When trying to make smaller images consider other Python variants like "slim" and "alpine" which lead a far
+smaller image size (compared to the standard debian) and yet can run perfectly fine.
+
+29. Below is an example of multi-stage build Dockerfile:
+
+    ```
+    FROM python:3.7.3 as dev
+    WORKDIR /app
+    COPY . .
+    RUN pip install cython==0.28.5
+    RUN python compile.py build_ext --inplace
+
+    FROM python:3.7.3-slim as prod
+    WORKDIR /app
+    COPY factors_flask.py requirements.txt /app/
+    COPY --from=dev /app/factors.cpython-37m-x86_64-linux-gnu.so /app
+    RUN pip install -r requirements.txt
+    CMD ["python","factors_flask.py"]
+    ```
+    
+    In the first part, a full base image is used to compile Cython code. However, once the final artifact `.so` has been
+    generated, we don't need the full environment (providing C/C++ subsystems, GCC etc.) and can simply use that
+    artifact in our code.
+    
+    Two things are new here:
+        1. aliasing the base image, for example `as dev`, in `FROM`
+        2. using the `--from=dev` in the `COPY`
+
+    The two `WORKDIR` as `/app` are of course dirs in their respective base-image based containers and hence hold their 
+    own contents.
+    
+    So files compiled in one base image can be copied (and that image gracefully discarded) so as to ensure that the
+    final image is smaller.
+    
+    **This optimization plays a much bigger role in compiled languages (like Java) more so than Python which is a fully 
+    interpreted language**.
+    
+30. So in the last point we can use a multi-stage build to get a small image and yet not lose the benefits of having
+the full image in the "compilation" phase. Since the image was small, it booted up fast.
+
+    So in short:
+    1. Fast computation
+    2. Fast booting of container
+
+    But it has one weakness. Every time we build this multi-stage build, the build process itself is relatively long.
+    
+    So one way to overcome that weakness is to create images after repeatable steps out of both of those stages and
+    use them for a *faster* multi-stage build.
+    
+    The image `cython:3.7.3-full` comes out of this Dockerfile which basically pre-installs `cython`.
+    
+    ```
+    FROM python:3.7.3
+    RUN pip install cython==0.28.5
+    CMD ["python", "compile.py", "build_ext", "--inplace"]
+    ```
+    
+    Note: I don't think executing the `CMD` in the Dockerfile above actually helps. Since it is re-executed in the
+    final Dockerfile. Otherwise it could be executed here and skipped in the final image. In that case, if the code
+    being sped up by cython changes, this image would need to be re-built.
+    
+    The second image `flask:1.0.3-slim` comes out of this Dockerfile which already installs the libraries needed.
+    
+    ```
+    FROM python:3.7.3-slim
+    COPY requirements.txt /tmp/
+    RUN pip install -r /tmp/requirements.txt
+    EXPOSE 5000
+    CMD ["flask", "run", "--host=0.0.0.0"]
+    ```
+    
+    Finally, the Dockerfile below, uses the two images as its base images. With no installation of cython or
+    requirements.txt, the build becomes faster.
+    
+    ```
+    FROM cython:3.7.3-full as dev
+    WORKDIR /app
+    COPY . .
+    RUN python compile.py build_ext --inplace
+
+    FROM flask:1.0.3-slim as prod
+    WORKDIR /app
+    COPY factors_flask.py /app/
+    COPY --from=dev /app/factors.cpython-37m-x86_64-linux-gnu.so /app
+    ENV FLASK_APP=factors_flask.py
+    # CMD is inherited
+    ```
+    
+31. Another fine point is that merely uninstalling unused libraries from a given base image doesn't really reduce
+the image size because the mechanism is copy on write which means the programs coming from underlying read-only layers
+remain preserved.
+
+    There is a way to squash the layers together (flatten them) so that un-installation actually removes the program.
+    In such a case, it will lead to the reduction of image size.
+    
+32. So how to build a container from scratch?
+
+    Here's a Dockerfile that does that:
+    
+    ```
+    FROM scratch
+    ADD rootfs.tar /
+    ENTRYPOINT ["/usr/local/bin/python"]
+    ```
+    
+    There is no base image called scratch. It just tells the docker build engine to start from scratch with minimal
+    metadata. The second line takes a TAR file and extracts it in the root folder (denoted by `/`).
+    
+    The third line basically starts the python.
+    
+    So generally speaking, this Dockerfile boils down to copying a compressed filesystem archive into a root directory.
+    
+    We just need a compressed filesystem archive. We have two options here:
+    
+    1. Take a *container* (not image) and copy its full filesystem content into a TAR archive with **`docker export`**.
+    
+       It takes a container (doesn't have to be running) name as an arg: `docker export -o rootfs.tar <container-name>`
+       
+    2. We can use some utility like `debbootstrap` to the same for us.
+    
+    In both cases, we end up with a TAR file containing the filesystem we need.
+    
+    Such scripts can be seen in the repo  [here](https://github.com/pythonincontainers/basescratch).
+    
+    The script run can also be viewed with asciinema in staticfiles for section3 called `debbootstrap-example.cast`.
+    
+    The filesystem can also be imported using `docker import` but is not as flexible as using the Dockerfile
+    shown above. Several `ENV`s must be set which are set by default in the Dockerfile method since `docker import`
+    assumes not defaults.
