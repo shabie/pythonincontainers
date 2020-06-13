@@ -1105,11 +1105,7 @@ within the Dockerfile. They seem almost identical. Except that `ENV` value can't
     # Create 'admin' User
     echo "from django.contrib.auth.models import User; User.objects.create_superuser('admin', 'admin@example.com', 'admin')" | python manage.py shell
     ```
-    
-    Here's the demo. The container startup is kind of long:
-    
-    ![django runtime startup](staticfiles/django-runtime.svg)
-    
+     
     So here is another approach. Packing all of this into an image so it boots much faster and serves still all the same
     goodies. Here's the Dockerfile for that:
     
