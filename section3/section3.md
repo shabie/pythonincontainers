@@ -1247,10 +1247,59 @@ remain preserved.
     
     In both cases, we end up with a TAR file containing the filesystem we need.
     
-    Such scripts can be seen in the repo  [here](https://github.com/pythonincontainers/basescratch).
+    Such scripts can be seen in the repo [here](https://github.com/pythonincontainers/basescratch).
     
     The script run can also be viewed with asciinema in staticfiles for section3 called `debbootstrap-example.cast`.
     
     The filesystem can also be imported using `docker import` but is not as flexible as using the Dockerfile
     shown above. Several `ENV`s must be set which are set by default in the Dockerfile method since `docker import`
     assumes not defaults.
+    
+33. In Dockerfiles specially for Django, `ENV PYTHONUNBUFFERED 1` line is used to  make sure python buffers nothing
+because then sometimes a traceback is not visible and the container dies before it gets the chance to flush the buffer.
+
+34. Nginx is a web server. It can also be used to serve static files. There are 3 options for that:
+
+    1. One way is to include the staticfiles in the image. This is an easy option but requires rebuilding the image
+    if the staticfiles change.
+    
+    2. Another option is to use a persistent volume shared between proxy server and application server. Gunicorn or
+    UWSGI being the application servers.
+    
+    This option has the drawback that it requires careful coordination specially if we have many application servers
+    running in parallel and they restart occasionally.
+    
+    3. Finally, the third option is to use a shared file server.
+    
+    The key is that no matter what we choose, we must also take into account the application upgrade procedure as well.
+    
+    The option 1. (i.e. including them in an image) can be done using a multi-stage build (first part collects the
+    static files and the other copies it to the server):
+    
+    ```
+    FROM django as dev
+    WORKDIR /code
+    COPY . .
+    RUN pip install dj-database-url==0.5.0
+    ARG DjangoSettings=mysite.settings_universal
+    ENV DJANGO_SETTINGS_MODULE=$DjangoSettings
+    RUN python manage.py collectstatic
+
+    FROM nginx:1.17.0
+    WORKDIR /code
+    COPY --from=dev /code/static /code/static
+    COPY mysite_nginx.conf /etc/nginx/conf.d/
+    ```
+    
+35. One of the reasons we use a web server is for SSL termination. And what is that? Quote from google search:
+
+    >The term SSL termination means that you are performing all encryption and decryption at the edge of your network, 
+    such as at the load balancer. The load balancer strips away the encryption and passes the messages in the clear to 
+    your servers. You might also hear this called SSL offloading.
+
+    so SSL termination means using the secure socket layer (i.e. https) and the "termination" part of it means it is
+    done very early i.e. at the "edge".
+    
+36. **OpenSSL** is a popular software library (implemented in most programming languages) for secure communication over
+    computer networks.
+    
