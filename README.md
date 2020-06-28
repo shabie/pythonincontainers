@@ -2,7 +2,7 @@
 
 My notes on the udemy course Python in Containers.
 
-It is a completely hands-on deep-drive into the world of containerization including:
+It is a hands-on deep-drive into the world of containerization including:
 
     * docker-machine
     * Dockerfile
@@ -13,3 +13,5 @@ It is a completely hands-on deep-drive into the world of containerization includ
     * docker compose
     * docker swarm
     * kubernetes
+
+![hello world docker](hello-world.svg)
