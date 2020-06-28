@@ -174,4 +174,98 @@ applications.
     If we really do want it to remove the volumes as well, we can add the `-v` option which stands for the `--volumes`
     flag.
     
+5. Docker Compose file is normally named `docker-compose.yaml` or `docker-compose.yml`. Both extensions work.
+
+    We can always use the `-f` flag (just like for Docker build) to pass any non-default docker compose filenames.
+    
+6. Docker Compose file structure (focus on volumes and versions):
+
+    1. Uses YAML syntax
+    
+    2. Can contain up-to 4 key-value mappings with the keys being as follows:
+        1. `version: ...`
+        2. `services: ...`
+        3. `networks: ...`
+        4. `volumes: ...`
+    
+    3. Version value must be a string (!!str is YAML type casting): `version: "3.7"` or `version: !!str 3.7`. If there
+    are multiple entries, only the last one is taken into account.
+    
+    4. A config file can be validated with this cmd: `docker-compose -f last_one_survives.yml config`
+    
+    5. Docker compose creates volumes before the services. It checks if any declared volumes have already been created.
+    If they are, they are simply mounted. If not, they are created. Declaration of volume looks like this:
+        
+    ```yaml
+    volumes:
+      my_vol:
+    ```
+
+    The declaration above is equivalent to: `docker volume create my_vol`. The default driver (can be seen with 
+    `docker info`) is used. However, you may want to create volumes elsewhere i.e. other than your own host machine
+    specially (which is the factory default at least) for the production environments. Then the plugins can be used. 
+    
+    Here's one example of using the netapp plugin driver:
+
+    ```yaml
+    volumes:
+      my_vol:
+        driver: netapp
+    ```
+    
+    List of supported plugs can be found **[here](https://docs.docker.com/engine/extend/legacy_plugins/)**
+    
+    Volumes that are already created and should only be used are available in 2 ways:
+    
+        1. We already have the volume with the same name that will be created like `compose-file_my_vol`. I mean for
+        this we would have in the compose file only written `my_vol` and the name conversion happens automatically.
+        
+        2. We use the `external` flag. Consider the example below:
+        
+        ```yaml
+        version: "3.7"
+        volumes:
+          int:
+          ext:
+            external:
+              name: my_vol
+        ```
+        
+        In the example above, two volumes are declared. One called `int` will be created with the name `compose-file_int`
+        and the other one will be accessible by the name `ext` uses however an already defined volume called `my_vol`.
+        
+        **Doing a `docker-compose down -v` will not remove the external one since, well, it is external.**
+           
+    6. One volume can be shared by several services (containers) declared in Docker Compose file, if they explicitly
+    mount it. Here's an example of one volume being mounted twice:
+    
+    ```yaml
+    version: "3.7"
+
+    volumes:
+      shared_vol:
+
+    services:
+      proxy1:
+        image: nginx:1.17.0
+        volumes:
+          - shared_vol:/static
+
+      proxy2:
+        image: nginx:1.17.0
+        volumes:
+          - shared_vol:/static
+    ```
+    
+    There is locking or sync mechanism between the containers using the shared volume which means the application must
+    implement the coordinated data access (I guess it makes sense to just read files like static from such shared
+    volumes).
+    
+    To execute a command on the service containers above (say to see contents of static folder) we can do the following:
+    
+    **`docker-compose -f shared_volume.yml exec proxy2 l -al /static`**
+    
+7. Docker Compose file structure (Networks):
+
+    
     
