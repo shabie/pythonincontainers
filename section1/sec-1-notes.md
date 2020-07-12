@@ -57,7 +57,7 @@ network ports. This is called **port forwarding**.
 
     More importantly, the IP addresses of these containers are largely unhelpful because
 while the machine may look (to the outside world) as if it has a **same** IP address
-(because it does), a whole range of different ports on the host machine can be mapped 
+(because it does), a whole range of different *ports* (and not *IP addresses*) on the host machine can be mapped 
 onto individual containers.
 
 13. Difference between `RUN` and `CMD` keywords of Dockerfile is that `RUN` is used to
