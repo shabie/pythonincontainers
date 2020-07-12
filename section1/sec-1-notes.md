@@ -1,5 +1,7 @@
 # Section 1 Notes
 
+Section 1 notes are very informal and brief. Proper notes begin from section 2.
+
 1. `docker run -it -rm -p 5001:5000`
 	* `it` - Takes you straight inside the container. These are 2 tags  `-i` (for interactive) and `-t` (for tty).
 	   Well it doesn't really take you *inside* but allows for execution of commands that take input from the terminal
