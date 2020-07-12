@@ -18,18 +18,19 @@
     * removing
     * dead
 
-5. Docker names can be changed with `docker container rename <OLD_AUTO_NAME> <NEW_NAME>`
+5. Docker container names can be changed with `docker container rename <OLD_AUTO_NAME> <NEW_NAME>`.
 
 6. The command `docker container start [-i] <CONTAINER_NAME_OR_ID>` has an `-i` flag but no `-t` flag.
-The reason behind this is that once the container has been created, `start` command only starts it.
-The `--tty` and `--interactive` options must be first defined at the creation time (tty literally stands for **teletypewriter** 
-which was a name of device allowing you to type text and send it away in the same time).
+The reason behind this is that once the container has been created, `start` command only starts it in the interactive
+mode. The `--tty` and `--interactive` options must be first defined at the creation time (tty literally stands for 
+**teletypewriter**  which was a name of device allowing you to type text and send it away in the same time).
 
     Explanation:
 
-    >Docker `start` command will start any stopped container. 
-    If you used docker `create` command to create a container, you can start it with the `start` command. 
-    Docker `run` command is a combination of `create` and `start` as it creates a new container and starts it immediately.
+    >Docker `start` command will start any stopped container.
+    If you used docker `create` command to create a container, you can start it with the `start` command.
+    Docker `run` command is a combination of `create` and `start` as it creates a new container and starts it
+    immediately.
 
 7. Here are some docker command abbreviations:
     * `docker pull` == `docker image pull` 
