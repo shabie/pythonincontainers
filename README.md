@@ -1,6 +1,6 @@
 # Python in Containers
 
-My notes on the udemy course Python in Containers.
+My notes on the Udemy course Python in Containers.
 
 It is a hands-on deep-drive into the world of containerization including:
 
