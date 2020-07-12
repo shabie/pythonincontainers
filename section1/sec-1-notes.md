@@ -1,7 +1,9 @@
 # Section 1 Notes
 
 1. `docker run -it -rm -p 5001:5000`
-	* `it` - Takes you straight inside the container. These are 2 tags  `-i` and `-t`
+	* `it` - Takes you straight inside the container. These are 2 tags  `-i` (for interactive) and `-t` (for tty).
+	   Well it doesn't really take you *inside* but allows for execution of commands that take input from the terminal
+	   to be executed.
 	* `rm` - Automatically remove the container when it exits
 	* `-p 5001:5000` - Publish port. Binds container's port 5000 to host's 5001
 
@@ -12,8 +14,7 @@ writeable layer. Later when this particular container is deleted, only the thin
 layer is deleted and the read-only parts of the image **(shared between all containers
 that use this image)** remains intact.
 
-    This also hightlights one of the differences of **image container** and **container
-runtime**.
+    This also highlights one of the differences of **image container** and **container runtime**.
 
 3. Images can be built manually:
     1. run a base linux image in interactive shell mode
