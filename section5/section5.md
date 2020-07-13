@@ -14,7 +14,7 @@ applications.
     
     ```yaml
     # Every docker-compose YAML file starts with declaration of docker-compose "language" version we are using.
-    # YAML doesn't need quotes normally for strings but for those that will be misinterpreted as float, we must use them.
+    # YAML doesn't need quotes for strings but for those that will be misinterpreted as float, we must use them.
     version: "3.7"
 
     # Services section declares Containers running Application Components
@@ -603,7 +603,7 @@ applications.
         expose:
           - 5432  # analogous to EXPOSE in dockerfile
         dns:
-          # both IPs below are Google's DNS servers. How they work? Watch [this](https://www.youtube.com/watch?v=mpQZVYPuDGU)
+          # both IPs below are Google's DNS servers. How they work? Watch [this](www.youtube.com/watch?v=mpQZVYPuDGU)
           - 8.8.8.8  # this is handy if we want to explicitly want the service to lookup in specific DNS servers... This
           - 8.8.4.4  # of course applies to external addresses bec. among containers, docker's own DNS service works.
         environment:
@@ -646,4 +646,139 @@ applications.
 
 9. Docker object names can be broken down into:
 
-    Project Name + Service Name where Project Name is the folder name by default (i.e. many examples have `compose-file`)
+    Project Name + Service Name where Project Name is folder name by default (i.e. many examples have `compose-file`
+    because it is the folder name of the project).
+    
+10. Docker-compose can be used to build images too. Not ideally done in production where time is critical since you
+want images to fire up as soon as possible.
+
+11. Here's an example of Docker-Compose being used for building images:
+
+    ```yaml
+    # test-build.yaml
+    version: "3.7"
+
+    services:
+      full:
+        image: shabie/flask-hello:3.7.3
+        ports:
+          - 5001:5000
+            build:                              # is ignored if image exists in cache. To force add --build after "up"
+          context: ./simple-flask               # path used as context. Can be absolute or relative to compose file loc.
+          dockerfile: Dockerfile-universal      # Dockerfile within the context. If standard name, this can be skipped.
+          args:
+            - ImageTag=3.7.3                    # argument to pass to Dockerfile
+          labels:
+            com.pythoninconrainers.app: simple-flask   # labels. If skipped you get <foldername><servicename>:latest
+            com.pythoninconrainers.image.base: full
+
+      slim:
+        image: shabie/flask-hello:3.7.3-slim
+        ports:
+          - 5002:5000
+        build:
+          context: ./simple-flask
+          dockerfile: Dockerfile-universal
+          args:
+            - ImageTag=3.7.3-slim
+          labels:
+            com.pythoninconrainers.app: simple-flask
+            com.pythoninconrainers.image.base: slim
+
+      alpine:
+        image: shabie/flask-hello:3.7.3-alpine
+        ports:
+          - 5003:5000
+        build:
+          context: ./simple-flask
+          dockerfile: Dockerfile-universal
+          args:
+            - ImageTag=3.7.3-alpine
+          labels:
+            com.pythoninconrainers.app: simple-flask
+            com.pythoninconrainers.image.base: alpine
+    ```
+    
+    `docker-compose -f test-build.yaml up -d` builds the image showing warnings that the image was built because was
+    not found. Next time you wanna force a re-build, add --build option to the command.
+    
+    `docker-compose -f test-build.yaml down --rmi all` deletes all the images created as a result of the up command.
+    
+12. If you are just interested in building images but not in running the service we can do this:
+
+    `docker-compose test-build.yaml build --parallel` this does not include `up` only build so the images are built.
+    The additional flag of `--parallel` means images are built in parallel.
+    
+    `docker-compose test-build.yaml build alpine` only build the image mentioned under the service `alpine`.
+    
+    `docker-compose -f test-build.yaml push` pushes the built images to registry (does not build them!).
+    
+13. The `--parallel` for building images isn't always a good idea specially if sequential building is what is needed.
+   
+14. Docker Compose has a `ps` command to see information about what (is or might run) once we run the docker-compose
+file:
+
+    `docker-compose -f django-polls-deploy.yml ps --services`
+    
+    prints the name of the services that will start or have started:
+    
+    ```
+    db
+    app1
+    proxy
+    ```
+    
+    We can also do this:
+    
+    `docker-compose -f django-polls-deploy.yml ps db`
+    
+    This shows everything about the db service but only if it has been started:
+    
+    ```
+             Name                       Command               State    Ports  
+    --------------------------------------------------------------------------
+    compose-lifecycle_db_1   docker-entrypoint.sh postg ...   Up      5432/tcp
+    ```
+    
+    Do this without the name of the `db` you get this:
+    
+    ```
+              Name                         Command               State               Ports             
+    ---------------------------------------------------------------------------------------------------
+    compose-lifecycle_app1_1    uwsgi uwsgi-nginx.ini            Up      8000/tcp                      
+    compose-lifecycle_db_1      docker-entrypoint.sh postg ...   Up      5432/tcp                      
+    compose-lifecycle_proxy_1   nginx -g daemon off;             Up      80/tcp, 0.0.0.0:8000->8000/tcp
+    ```
+    
+    A service can be paused or un-paused like this:
+    
+    * `docker-compose -f django-polls-deploy.yml pause db`
+    * `docker-compose -f django-polls-deploy.yml unpause db`
+    
+    Skip the service name and it pauses all services.
+    
+    Similarly a service can be stopped, started or restarted (restart is stop and start in one). The only change is
+    that the `pause` keyword is replaced wit `stop`, `start` and `restart`.
+    
+    The difference between pause and stop is that pause simply suspends the processes in the container and the full
+    state is maintained in memory so it can simply resume immediately. Stop on the other hand gracefully shuts down
+    the processes and after a timeout kills them.
+    
+    Even logs can be checked by replace `pause` with `logs`.
+    
+    There are two more notable sub-commands: `exec` and `run`.
+    
+    Exec expects a running container (status up) and executes the command in the container.
+    
+    Run on the other hand, fires up a new container and runs the command in it. A good use of this is to run the
+    one-time commands.
+    
+    Take for example the db initialization commands. These can be run as `run` in temporary app1 containers:
+    
+    * `docker-compose-f django-polls-deploy.yml run --rm app1 python manage.py migrate`
+    * `docker-compose-f django-polls-deploy.yml run --rm app1 python manage.py loaddata initial_data.json`
+    * `docker-compose-f django-polls-deploy.yml run --rm app1 python manage.py createsuperuser` # interactive command
+    
+15. 
+    
+    

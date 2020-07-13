@@ -53,8 +53,8 @@ mode. The `--tty` and `--interactive` options must be first defined at the creat
     * paths should be absolute not relative
 
     ###### Examples
-    `docker run -it -v ${PWD}:/app python`
-    `docker run -d -v ${PWD}:/data python`  (`-d` is for detach or daemon i.e. runs it in the background freeing 
+    * `docker run -it -v ${PWD}:/app python`
+    * `docker run -d -v ${PWD}:/data python`  (`-d` is for detach or daemon i.e. runs it in the background freeing 
     the current session)
 
 10. It so happens that containers started above for example, start in the python interactive shell. If the shell is exited,
@@ -63,9 +63,10 @@ a normal state for a container, when the main process running in it has exited.*
 
 11. This means that scripts can be executed inside a container as follows at the end of which the container will exit:
 
-    `docker run -it --name baby_python -v ${PWD}:/app python python /app/myfirst.py`  (executes the myfirst.py)
-    `docker start -i baby_python` (executing cmd above already saves the starting cmd i.e. `python /app/myfirst.py` into
-     the container metadata so it is not needed next time.)
+    * `docker run -it --name baby_python -v ${PWD}:/app python python /app/myfirst.py`  (executes the myfirst.py)
+    * `docker start -i baby_python` (executing cmd above already saves the starting cmd i.e. `python /app/myfirst.py`
+    into the container metadata so it is not needed next time. Does that mean it is executed automatically? Yes see
+    here for [details](https://stackoverflow.com/a/26539514/7996306))
 
     ###### MINOR DETAIL THAT SEEMED IMPORTANT
     `docker run` by default attaches stdout and stderr so even skipping this flag `-it` shows the print out of python script.
@@ -85,13 +86,12 @@ a normal state for a container, when the main process running in it has exited.*
     `ENTRYPOINT ["echo", "one"]`
     `CMD ["two", "three"]`
 
-    If the container above is run (these are creation time things so I mean `run` **not** `start`), it executes the command
-    `echo one two three`. However, if the container above is run with custom parameters like:
+    If the container above is run (these are creation time things so I mean `run` **not** `start`), it executes the
+    command `echo one two three`. However, if the container above is run with custom parameters like:
 
     `docker run -it <SOME_IMAGE_NAME> five six`
 
-    this will execute:
-    `echo one five six`
+    this will execute: `echo one five six`
 
     So the `CMD` part of the parameters get overwritten.
 
@@ -127,11 +127,12 @@ running in detached mode i.e. in background). Here are some other options:
     * So the right way to detach is `Ctrl+p` followed by `Ctrl+q`
 
 17. Docker by default creates the container with `--sig-proxy true` means certain control characters (like `Ctrl+c`) are
-interpreted as signals. **`Ctrl+c` generates SIGINT which is interpreted by many apps a request to quit.**
+interpreted as signals. **`Ctrl+c` generates SIGINT which is interpreted by many apps as a request to quit.**
 
 18. Docker has a really cool feature of running an ad-hoc command inside a **running** container called `exec`. 
     For example, `docker exec <CONTAINER_NAME> ps -ef` returns all the processes inside the container. Another example,
-    `docker exec -it <CONTAINER_NAME> bash` runs a bash terminal within the container.
+    `docker exec -it <CONTAINER_NAME> bash` runs a bash terminal within the container which we can use to hack inside
+    the container.
 
 19. Docker container can use up all of the system resources (CPU and RAM). For windows and mac os, the resources are limited
 by the linux VM resources running on them however for Linux it really can take over the full system's resources. Hence,
@@ -164,7 +165,7 @@ based on the container name (i.e. names act like URLs) for such user-defined net
 
     The container attachment looks like this:
 
-    `docker run -d --network my-net <IMAGE_NAME>`  no `-p` flag since we're not interested in accessing this container 
+    `docker run -d --network my-net <IMAGE_NAME>`. Over herewe have intentionally not defined a `-p` flag since we're not interested in accessing this container 
     directly from host but perhaps through another container.
 
     The DNS is dynamic i.e. containers created after a particular container also become visible/accessible to older ones too.
@@ -195,7 +196,7 @@ Linking**.
 
 5. Side point: the command above starts the DB engine including the server. PgAdmin4 is an admin tool to manage such 
 postgres servers by establishing connections to those servers using the server's host address, superuser name 
-and password.
+and password. The default postgres user is... well `postgres` so you don't have to pass it necessarily.
 
 6. Networking is a core capability of docker containers.
     
@@ -233,7 +234,7 @@ and password.
     * A network connected to `host` has *no network isolation*. All its published ports are directly visible in the
     host system. This is not really used in production.
 
-8. `docker network create` allows us to create user-defined networks.
+8. `docker network create <NETWORK_NAME>` allows us to create user-defined networks.
 
     * Docker uses the concept of **drivers** to extend its network capabilities. Several such drivers are available
     built-in, others can be install as network plug-ins.
@@ -241,9 +242,10 @@ and password.
     * `bridge` is the default network driver
     
     * `macvlan` creates a network where containers look like separate physical devices with their own MAC addresses.
-    Supporting hardware setup is needed (so-called promiscuous mode). Not very commonly used.
+    Supporting hardware setup is needed (so-called promiscuous mode). Not very commonly used. macvlan my guess is
+    stands for MAC Virtual LAN.
     
-    *`overlay` is very important. It allows for creation of network across several docker runtimes (or several hosts).
+    * `overlay` is very important. It allows for creation of network across several docker runtimes (or several hosts).
     It has the scope of a **swarm** rather than individual hosts (or to be more precise individual docker engines).
     With `docker machine` several docker runtimes can be run on a single host. These simulate a swarm on a single host
     as well and would do well with the `overlay` driver.
@@ -269,6 +271,10 @@ the `tmpfs` mount. Quote from official docs:
     anywhere permanently, and to increase the container’s performance by avoiding writing into the container’s 
     writable layer.
 
+    `tmpfs` stands for temporary filesystem and is a filesystem in memory. It is removed as soon as the container
+    is removed but is very fast. It is preferred to writing in the container writable layer filesystem. It mounts
+    like a persistent docker volume.
+
 2. Docker makes data persistence possible with the help of Persistent Data Volumes. Docker runtimes give us the
 possibility to mount volumes to containers.
 
@@ -289,11 +295,11 @@ using a non-linux OS.). Inspecting it with `docker volume inspect my-vol` on an 
     ]
     ```
 
-4. Volumes can only be mounted at the time of container creation. There is no straightforward way of mounting a volume
+4. Volumes can **only** be mounted at the time of container creation. There is no straightforward way of mounting a volume
 on an already running container.
 
-5. `docker run -it --name mypython --volume my-vol:/app <IMAGE_NAME>` will start the container with volume mounted in
-the `/app` path of the container.
+5. `docker run -it --name mypython --volume my-vol:/app <IMAGE_NAME>` will start the container with created volume 
+`my-vol` mounted in the `/app` path of the container.
 
 6. Performance of the data storage can be enhanced by mounting a SSD to this directory or even a network storage to
 prevent data loss even in case of docker host failure.
