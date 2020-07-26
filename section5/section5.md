@@ -716,7 +716,43 @@ want images to fire up as soon as possible.
 13. The `--parallel` for building images isn't always a good idea specially if sequential building is what is needed.
    
 14. Docker Compose has a `ps` command to see information about what (is or might run) once we run the docker-compose
-file:
+file. The Docker-compose YAML example below will be used for a few examples:
+
+    ```yaml
+    version: "3.7"
+    services:
+      db:
+    # Postgres DB Container Version 11.3
+        image: postgres:11.4
+        networks:
+          - polls_net
+        volumes:
+          - polls_vol:/var/lib/postgresql/data
+        env_file:
+          - project-files/deployment.env
+        command:
+          - 'postgres'
+          - '-c'
+          - 'wal_level=replica'  # wal -> Write Ahead Log -> changes are 1st written in a log before being written to DB
+          - '-c'
+          - 'archive_mode=on'
+      app1:
+        image: pythonincontainers/django-polls:nginx
+        networks:
+          - polls_net
+        env_file:
+          - project-files/deployment.env
+      proxy:
+        image: pythonincontainers/mynginx:latest
+        networks:
+          - polls_net
+        ports:
+          - "8000:8000"
+    networks:
+      polls_net:
+    volumes:
+      polls_vol:
+    ```
 
     `docker-compose -f django-polls-deploy.yml ps --services`
     
@@ -775,10 +811,456 @@ file:
     
     Take for example the db initialization commands. These can be run as `run` in temporary app1 containers:
     
-    * `docker-compose-f django-polls-deploy.yml run --rm app1 python manage.py migrate`
-    * `docker-compose-f django-polls-deploy.yml run --rm app1 python manage.py loaddata initial_data.json`
-    * `docker-compose-f django-polls-deploy.yml run --rm app1 python manage.py createsuperuser` # interactive command
+    * `docker-compose -f django-polls-deploy.yml run --rm app1 python manage.py migrate`
+    * `docker-compose -f django-polls-deploy.yml run --rm app1 python manage.py loaddata initial_data.json`
+    * `docker-compose -f django-polls-deploy.yml run --rm app1 python manage.py createsuperuser` # interactive command
     
-15. 
+15. If we wanted to update the version of postgres in the YAML above, we could simply change the version from say 11.3
+to 11.4 and do a `docker-compose -f django-polls-depoly up -d` to only update the one service that has changed.
+
+    Docker-compose compares the state of the file running setup to the new docker-compose and stops and restarts
+    the services where changes occurred. This means `up` can simply be called again without `down`. Even the data
+    remains unharmed because we are using a volume to store it.
     
+16. One way to "remember" which commits were the ones where the YAML was changed, we can use git tags. So in the commit
+where I make the change to 11.4, I can check that version out later if I have tagged correctly using:
     
+    `git checkout [-f] 11.4`  # -f is to force overwrite changes I may have made locally
+
+17. `docker-compose -f django-polls-deploy.yml up -d --remove-orphans` this will remove orphan containers i.e. containers
+that are not needed in the current config (say a 4th container where as the current YAML file defines 3).
+
+18. Services are restarted if things change in a docker-compose YAML file (say the postgres version update). If we
+follow best practices, they have minimal impact on availability.
+
+19. Docker-compose can be run with multiple docker-compose files. A use-case for such a functionality is that it allows
+the operations to be kept separate to the actual services. Here's an example of DB initialization using a second compose
+YAML file (notice how it uses the same polls_net but does not define it).
+
+    ```yaml
+    version: "3.7"
+    volumes:
+      polls_clone:
+        name: polls_clone  # vol name won't have folder name (called "stack name" in docs) prefix if explicitly defined
+    services:
+    # Initialization Service
+    # please run with:
+    # docker-compose -f django-polls-deploy.yml -f django-polls-ops.yml run --rm init
+      init:
+        image: pythonincontainers/django-polls:nginx
+        networks:
+          - polls_net
+        env_file:
+          - project-files/deployment.env
+        # the 3 commands we need to initialize
+        command: ["/bin/bash", "-c",
+                  "python manage.py migrate;
+                   python manage.py loaddata initial_data.json;
+                   python manage.py createsuperuser"]
+        tty: true
+    # Database Cloning Service
+    # Performs full, on-line Backup of "db" Service onto "polls_clone" Volume
+    # Removes previous backup before taking fresh one
+    # please run with:
+    # docker-compose -f django-polls-deploy.yml -f django-polls-ops.yml run --rm db-clone
+      db-clone:
+        image: postgres:11.4
+        volumes:
+          - polls_clone:/clone
+        entrypoint: ["/bin/bash", "-c",
+                  "rm -rf /clone/*;
+                   pg_basebackup -h localhost -U pollsuser -D /clone"]
+        network_mode: "service:db"  # attaches this service to network stack of DB service container (same localhost)
+    ```
+
+    Then we can run things in two steps:
+    
+    1. `docker-compose -f django-polls-deploy-yml up -d` : This step is needed to run the 2nd step.
+    2. `docker-compose -f django-polls-deploy.yml -f ops.yml run --rm init`
+    
+20. Docker-compose basically merges compose files if more than one are passed. The ones in the last one overwrite
+settings in the earlier ones if identically named services are defined in it. For example, in the example below we
+start a db server with a PostgreSQL 11.4 although the first one defines the 11.3:
+
+    `docker-compose -f django-polls-deploy.yml -f psql-11.4.yml up -d`
+    
+21. Here's a way to do a database clone for test purposes (a hot clone i.e. the db server is available for read/write
+the entire time). The YAML file above contains the db-clone service already.
+
+    The command that gets executed is this:
+    
+    `rm -rf /clone/*; pg_basebackup -h localhost -U pollsuser -D /clone`
+    
+    It first clears the contents of the folder and then uses the postgres command `pg_basebackup`. The `-h` flag asks
+    the postgres engine to enter the hot-backup mode. In this mode, it stops writing data to its data files but keeps
+    logging all changes to WAL (write ahead log) file.
+    
+    After postgres enters this mode, `pg_basebackup` copies all files in the folder where data files are located (in our
+    case that would be `/var/lib/postgresql/data` since that is where we mount the volume. See the 2 YAMLs above.) to
+    the target folder which is `/clone`.
+    
+    After the copying is completed, the DB engine quits hot backup mode and closes current WAL file (which BTW also
+    gets backed up.)
+    
+    DB Engine applies all changes from the WAL to the data files (i.e. the database) to get proper state.
+    
+    This creates an actual clone of a database. This procedure can be used for cases when the application cannot be
+    stopped very frequently.
+    
+22. Let's perform the backup described above. The command to use would be this:
+
+    `docker-compose -f django-polls-deploy.yml -f ops.yml run --rm db-clone`
+    
+    Even the the services from `django-polls-deploy.yml` were already running when we executed this, the ops file
+    needs the context in order to work hence must be mentioned. Only running the ops file like this:
+    
+    `docker-compose -f ops.yml run --rm db-clone`
+    
+    returns the error:
+    
+    `ERROR: Service 'db-clone' uses the network stack of service 'db' which is undefined.`
+    
+23. The backup can then be tested to really work in a separate container. Here's a separate YAML file to do it. It can
+be thought of as a YAML to run our "test" setup using real data (see the volumes section). This YAML file is in a
+separate folder which allows easy naming of identically named services (see output of `docker container ls` later):
+
+    ```yaml
+    version: "3.7"
+
+    services:
+      db:
+        image: postgres:11.3
+        networks:
+          - polls_net
+        volumes:
+          - polls_vol:/var/lib/postgresql/data
+        env_file:
+          - deployment.env
+
+      app1:
+        image: pythonincontainers/django-polls:nginx
+        networks:
+          - polls_net
+        env_file:
+          - deployment.env
+
+      proxy:
+        image: pythonincontainers/mynginx:latest
+        networks:
+          - polls_net
+        ports:
+          - "8001:8000"
+
+    networks:
+      polls_net:
+
+    volumes:
+      polls_vol:
+        external:  # external option indicates to docker-compose to expect this resource to be available
+          name: polls_clone
+    ```
+    
+    If I do `docker container ls` I see this:
+    
+    ```
+    CONTAINER ID        IMAGE                                   COMMAND                  CREATED              STATUS              PORTS                            NAMES
+    6a681de0cb66        postgres:11.3                           "docker-entrypoint.s…"   About a minute ago   Up About a minute   5432/tcp                         test-env_db_1
+    4b8ffa24b8f8        pythonincontainers/django-polls:nginx   "uwsgi uwsgi-nginx.i…"   About a minute ago   Up About a minute   8000/tcp                         test-env_app1_1
+    e2323fd4309e        pythonincontainers/mynginx:latest       "nginx -g 'daemon of…"   About a minute ago   Up About a minute   80/tcp, 0.0.0.0:8001->8000/tcp   test-env_proxy_1
+    7d3523b70d45        postgres:11.4                           "docker-entrypoint.s…"   22 hours ago         Up 22 hours         5432/tcp                         compose-lifecycle_db_1
+    9eb560f38fdd        pythonincontainers/mynginx:latest       "nginx -g 'daemon of…"   22 hours ago         Up 22 hours         80/tcp, 0.0.0.0:8000->8000/tcp   compose-lifecycle_proxy_1
+    5c57e6161853        pythonincontainers/django-polls:nginx   "uwsgi uwsgi-nginx.i…"   22 hours ago         Up 22 hours         8000/tcp                         compose-lifecycle_app1_1
+    ```
+    
+    The backup works as we can see the questions on localhost:8000 as well as localhost:8001
+    
+24. As a last point let's try to use the backup to start a service with Postgres 12 (the backup was created with 11):
+
+    `docker-compose -f test_env/deploy-clone.yml -f psql-12beta3.yml up -d`
+    
+    The second YAML file simply overwites the postgres version with the newer one. It contains only this:
+    
+    ```yaml
+    version: "3.7"
+
+    services:
+      db:
+        image: postgres:12-beta3
+    ```
+    
+    It fails because we are using a different version. This saves us from a disastrous upgrade directly in production.
+    We would need another upgrade procedure.
+    
+    Lets see the logs with this `docker-compose -f test-env/deploy-clone.yml logs db`:
+    
+    ```shell
+    db_1     | 2020-07-15 20:00:54.895 UTC [1] FATAL:  database files are incompatible with server
+    db_1     | 2020-07-15 20:00:54.895 UTC [1] DETAIL:  The data directory was initialized by PostgreSQL version 11, which is not compatible with this version 12beta3 (Debian 12~beta3-1.pgdg100+1).
+    ```
+    
+25. What if we had 3/30/300 computers (and hence 3 docker hosts) to run our application? How could we on one hand, take
+full advantage of the additional compute power and on the other make sure that we create redundancies in our system
+such that a failure of one host is not the failure of the whole system?
+
+    Answer: Container Orchestration - in our case Docker Swarm
+    
+26. **Container Orchestration is a class of tools that helps to manage large-scale container deployments across a 
+cluster of container engine hosts.**
+
+27. Docker Swarm:
+    * It is part of the docker engine. This means every docker machine (i.e. a real or virtual machine running its own
+    docker engine) can work as swarm node.
+    * Docker engine must be switched to swarm mode which can be deactivated at any moment. By default it is not.
+    * Swarm cluster is a group of docker engines
+    * Smallest swarm can be just one node
+    * Nodes can be added later to the swarm cluster
+    * No clear guidance on the upper limit of the nodes but should work with several thousand nodes
+    * The nodes must be able to communicate with each other using their IP Addresses only over a low-latency network
+    * It is technically possible to setup a swarm cluster across AWS or Azure's regions. However, high network latency
+    between regions may cause cluster instability and render it unusable.
+    * Docker swarm has two types of nodes:
+        1. Manager
+        2. Worker
+
+28. Manager nodes keep information about cluster state like:
+    1. List of all nodes with their types or functions
+    2. Statuses of all nodes:
+        - if they are healthy and can accept workloads
+        - have been paused for maintenance
+        - are being drained i.e. nodes are being "emptied" to pause the service or shut it down.
+    3. List of all swarm services running in the cluster (one service may have 5 nodes due to 5 replication factor)
+    with their desired state and current status
+    4. List of all cluster-wide networks and their DNS services
+    5. Information about cluster ingress network and port mappings of swarm services.
+    6. Configuration and secrets used by swarm services.
+    7. There must be at least one manager node in a cluster.
+    8. Manager node tasks:
+        * Deploy and manage swarm services and service stacks (stack meaning groups of services)
+        * Deploy and manager overlay networks. Overlay networks span across cluster nodes enabling easy service
+        discovery and communication amongst containers
+        *  Perform all other cluster-related operations
+        
+    >Data Ingress. While data egress describes the outbound traffic originating from within a network, data ingress,
+    in contrast, refers to the reverse: traffic that originates outside the network that is traveling into the 
+    network.
+      
+    We will be practicing using 3-4 nodes. The nodes will be created on the same host using VMs.
+    
+29. Availability of manager nodes:
+    * Manager nodes coordinate replication of all manager data between them
+    * There should be an odd number of managers to make their consensus algorithm work optimally
+    * Hence, the minimum number of nodes needed to maintain high availability is 3
+    * If there are 5 manager nodes, the maximum loss allowed is 2
+    * Docker recommends a maximum of 7 manager nodes
+    * If a manager is lost, a new node can be added to the cluster as a new manager. It quickly replicates data from
+    other managers
+
+30. Swarm worker nodes:
+    * run the swarm services
+    * if a worker node is lost, managers get services to the desired state by restarting lost containers on other nodes
+
+31. Running workload on swarm:
+    * Even though `docker run` can be used to run containers on swarm clusters, swarm cluster is unaware of any such
+    container and does not take any care of such containers. They are not swam citizens.
+    * The point above applies for containers started as a result of `docker-compose`
+    * The only way to run and manage containers as swarm objects is by starting them as swarm services only
+    * The services can be started in two ways:
+        - use `docker service` command
+        - deploy services using compose file with `docker stack`
+    * Swarm stack extends the concept of compose of multi-node services. Extends because docker-compose starts
+    everything on one node but swarm starts it on a multi-node cluster
+    * Example: We can launch a service which creates one container on every node of the cluster. This is called the
+    global deployment mode. If a new node is added to the cluster, the service container is started automatically on
+    it by the service controller.
+
+32. Docker swarm networks:
+    * docker swarm can create virtual networks connecting containers running on different nodes
+    * Muti-node networks are the core feature of docker swarm. These types of networks are called "overlay" networks.
+    * There is a driver also called overlay used to create... overlay networks. It is a standard part of docker engine
+    software
+    * The KEY feature of overlay networks is its simplicity
+    * They are very easy to create and just work!
+    * Overlay networks are created either manually or as a part of swarm stack services deployment
+    * When we create an overlay network on a manager node, it becomes available for all nodes on the cluster
+    * It is not necessarily visible on every node with `docker network ls` but it is there
+    * 3rd party plugins in exist like WeaveNet etc. that have some nice features in addition to the standard
+    functionality
+
+33. Swarm Ingress network
+    * docker swarm has a default cluster-wide ingress network
+    * Main goal of this network is to expose ports of the services on every node of the cluster **regardless** if the
+    service container actually runs on the node or not
+    * Idea: we can add an external load-balancer and configure it to proxy requests to all container nodes without
+    caring how particular services are deployed inside cluster. Question: But doesn't that mean that it will be
+    handled simultaneously by all replicas running? Explanation will follow later.
+    
+    To proxy a request means to basically direct the request to a server that then makes a request on behalf of that
+    original request. To the server it seems like it originated from the proxy server itself.
+    
+    [Reverse Proxy vs Load Balancer - Difference](nginx.com/resources/glossary/reverse-proxy-vs-load-balancer/)
+    
+34. Volumes in Swarm:
+    * swarm services can use persistent volumes
+    * swarm cluster has no special arrangements for cluster-wide storage
+    * volumes are created on nodes where the container is scheduled to implement swarm service
+    * the last point means that if the local disk was used to store the volume, loss of node means loss of data since
+    the persistent volumes are lost
+    * swarm may restart nodes and recreate persistent volumes on other nodes according to restart policies. These are,
+    however, going to be new volumes
+    * A high availability storage backend can be deployed to prevent data loss using wide array of 3rd party plugins
+    that make this possible preventing data loss
+    * Another option to prevent data loss due to node loss is to data replication on an application component level
+    * Finally, another option is database replication (master - slave nodes I guess)
+
+35. A swarm cluster can be provisioned using VMs. Let's create one:
+
+    `docker-machine create -d <driver> swarm-mgr1`
+    `docker-machine create -d <driver> swarm-wrk1`
+    `docker-machine create -d <driver> swarm-wrk2`
+    
+    The driver can be the virtualbox driver (on linux) and hyperv on windows.
+    
+    It takes a while to create all 3 VMs. To test them, we can run an ssh command on all 3 of them:
+    
+    `docker-machine ssh swarm-mgr1 docker --version`
+    
+    Doing `docker-machine ls` returns this:
+    
+    ```shell
+    NAME         ACTIVE   DRIVER       STATE     URL                         SWARM   DOCKER      ERRORS
+    swarm-mgr1   -        virtualbox   Running   tcp://192.168.99.100:2376           v19.03.12   
+    swarm-wrk1   -        virtualbox   Running   tcp://192.168.99.101:2376           v19.03.12   
+    swarm-wrk2   -        virtualbox   Running   tcp://192.168.99.102:2376           v19.03.12   
+    ```
+    
+36. Swarm cluster must be initialized on one of participating nodes which is going to become a manager node. Then all
+nodes join the cluster as managers or worker nodes.
+
+37. Let's initialize a cluster on the machine called `swarm-mgr1`:
+
+    **`docker-machine ssh swarm-mgr1 docker swarm init --advertise-addr $(docker-machine ip swarm-mgr1)`**
+    
+    The response looks like this:
+    
+    ```shell
+    Swarm initialized: current node (c9cfunq2lcdipb2v4fjj74vcm) is now a manager.
+
+    To add a worker to this swarm, run the following command:
+
+        docker swarm join --token SWMTKN-1-0rmf7ni4q5x28wypil0zsdsdl75y3cz4fvis8f3tm9zz-6vamzbbkds88fxfm4minfgoho 192.168.99.104:2377
+
+    To add a manager to this swarm, run 'docker swarm join-token manager' and follow the instructions.
+    ```
+    
+38. Why was this flag `--advertise-addr` necessary? Because the docker-machine has different addresses on 2
+different interfaces (as a matter of fact this is the error message itself too :D):
+
+    1. NAT (Network Address Translation) Interface with 10.0.2.15 Address: This gives the machine access to internet
+    via development host networking stack. **The machine is not reachable (locally or anywhere) at this IP**.
+    2. Host-only Interface with IP Address in `192.168.99.0/24` network (actual IP in this case is 192.168.99.100):
+    This IP is assigned to the so-called host network. Each of the 3 machines are connected to this network with a
+    unique address (as can be seen above) and can talk to each other as well as the host system.
+    
+    Question: Why are IPs called interfaces?
+    
+    Because all network addresses, including IP addresses, are network interfaces. We don't ping a computer, we ping
+    its network interface. The word "interface" as the name suggests is the point of interconnection between two
+    devices (on a network). Without an interface, the communication between two networks or networked devices is
+    not possible.
+    
+    Below is an interesting blog on the matter. Most interesting is how a web-server is started in a newly created 
+    network namespace (defined on the host) which is unreachable from the host through cURL simply because it doesn't
+    have any interface to understand the request packet being sent through cURL.
+    
+    Interfaces were historically pieces of hardware where you plugged in the cable but now can also be written
+    in software.
+    
+    [Brilliant post on what is a network interface really](https://jvns.ca/blog/2017/09/03/network-interfaces/)
+    
+39. The newly created cluster, as the instructions show, can be joined using an encrypted token and the node address.
+Hence, the token should be kept secret. It is a bad idea to put them on github for example.
+
+40. The token can be viewed later using this command (both for joining as manager and worker):
+
+    `docker-machine ssh swarm-mgr1 docker swarm join-token [worker|manager]`
+    
+    The tokens are valid until we rotate them.
+    
+41. Let's make the worker machines join the swarm:
+    
+    `docker-machine ssh swarm-wrk1 docker swarm join --token <TOKEN> 192.168.99.100:2377`
+    
+42. Let's check if it worked `docker-machine ssh <MACHINE_NAME> docker info | grep Swarm`
+
+    The output looks like (or should look like) this: `Swarm: active` on all 3 nodes.
+    
+43. The above setup is okay for test or dev but not production. Swarm can use separate physical networks for
+management data and for user or workload data. This is one of the required features in production setup.
+
+44. To simplify things we can set the context to manager machine. First check using `docker-machine env swarm-mgr1`
+and then execute the instruction. `eval $(docker-machine env swarm-mgr1)`
+
+45. We deploy one utility service to get a visual representation of our services in the cluster. Docker has a name
+and image to implement it `dockersamples/visualizer`. The dockerhub page provides the command to be executed:
+
+    ```shell
+    docker service create \
+    --name=viz \
+    --publish=8080:8080/tcp \
+    --constraint=node.role==manager \
+    --mount=type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
+    dockersamples/visualizer:stable
+    ```
+    
+    We can run the command directly since the context is set already and no need to do `docker-machine ssh...`.
+    
+    It takes a some time since the image is pulled into the machine. This is what can finally be seen at the IP
+    address of the docker-machine (The IP can be found using `docker-machine ip swarm-mgr1`:
+    
+    ![docker swarm visualizer](staticfiles/docker-swarm-visualizer.png)
+    
+    The swarm can be removed with the following command: `docker-machine rm swarm-mgr1 swarm-wrk1 swarm-wrk2`
+    
+46. The commands specific to docker swarm are not that many:
+    
+    * `docker swarm` - manage swarm cluster
+    * `docker node` - manage swarm nodes
+    * `docker service` - create and manage swarm services
+    * `docker stack` - create and manage stacks of services
+    * `docker deploy` - short of `docker stack deploy`
+    * `docker config` - create and manage cluster-wide service configuration files
+    * `docker secrets` - create and manage cluster-wide service secrets
+    * `docker network` - create and manage cluster-wide overlay networks (also used normally)
+    
+    All other normal docker commands, even though they can be executed, operate on a single docker engine (engine is 
+    more specific since docker host may be running multiple engines through VMs) and not on the whole cluster.
+    
+47. Important considerations regarding docker swarm:
+
+    * Images - All commands related to images work on a single node. `docker build` works on a single node and stores
+    the image in that node's cache only. Swarm does not provide any special cluster-oriented image management commands.
+    
+    If images must be made available to more than one node, they must be made available on an image registry like
+    Dockerhub, Azure Container Registry etc. Another option is to use local registry setup on a docker-machine.
+    
+    * Volumes - Docker swarm doesn't have any special support for managing persistent volumes in a cluster.
+    
+    Volumes are create on a node and are accessible only on this particular node. Swarm has no command to move or copy
+    docker volumes between nodes.
+    
+    The open-source community has developed "swarm-aware" storage plug-ins to fill the gap.
+    
+    * Networks - Standard bridge type network is accessible on a node only where it is created.
+    
+    Published nodes can be access on any node in a swarm by using the publishing node-IP address or node-DNS name.
+    
+    Swarm comes with an overlay network driver to create virtual networks available and accessible on all nodes in the
+    cluster.
+    
+    This means that a standalone container (a container that is not a swarm citizen) can join such a network and can
+    communicate with all the services using the network.
+    
+    * High availability - Swarm services can have redundancies and if a node disappears another is fired up to keep
+    the number of nodes of a service the same.
+    
+48. 
