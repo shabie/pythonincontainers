@@ -1118,7 +1118,7 @@ cluster of container engine hosts.**
     `docker-machine create -d <driver> swarm-wrk1`
     `docker-machine create -d <driver> swarm-wrk2`
     
-    The driver can be the virtualbox driver (on linux) and hyperv on windows.
+    The driver (`-d`) can be the virtualbox driver (on linux) and hyperv on windows.
     
     It takes a while to create all 3 VMs. To test them, we can run an ssh command on all 3 of them:
     
@@ -1189,6 +1189,8 @@ Hence, the token should be kept secret. It is a bad idea to put them on github f
 41. Let's make the worker machines join the swarm:
     
     `docker-machine ssh swarm-wrk1 docker swarm join --token <TOKEN> 192.168.99.100:2377`
+    
+    A node can leave the swarm by executing `docker swarm leave` on the worker.
     
 42. Let's check if it worked `docker-machine ssh <MACHINE_NAME> docker info | grep Swarm`
 
@@ -1263,4 +1265,382 @@ and image to implement it `dockersamples/visualizer`. The dockerhub page provide
     * High availability - Swarm services can have redundancies and if a node disappears another is fired up to keep
     the number of nodes of a service the same.
     
-48. 
+48. The commands to follow will assume `eval $(docker-machine env swarm-mgr1/wrk1/wrk2)` has been done in the terminal.
+
+    To check which machine's engine the terminal is accessing do `docker-machine ls` and check the * in the `ACTIVE`
+    column.
+    
+    Let's run a container on worker 1 (assuming env vars set):
+    
+    `docker run -d --name hello -p 5000:5000 pythonincontainers/simple-flask`
+    
+    The container is then accessible on: `192-168.99.101:5000`. It is neither accessible nor visible from other nodes
+    since this standalone container is not a member of swarm cluster (I guess) and is not connected to overlay network.
+    
+49. Let's create an **overlay** network and run containers attached to it on all nodes. `docker network create` has
+following options:
+
+    1. `--driver overlay` - this is mandatory if we want an overlay network
+    2. `--attachable` - if we want to attach standalone containers to it, we must use this option
+    3. `--opt encrypted` - enable encryption of data sent between cluster nodes (AES)
+    
+    `docker network create --driver overlay --attachable cluster_net`
+    
+    Executing this on worker1 node gives the following error:
+    ```bash
+    Error response from daemon: Cannot create a multi-host network from a worker node. Please create the network from a manager node.
+    ```
+    
+    **All swarm related operations must be performed on manager node.**
+    
+    The network is now available in the list of networks `docker network ls`.
+
+50. We will be implementing the following multi-node setup:
+
+    ![multi node setup](staticfiles/multi-node-setup.png)
+    
+51. Let's get started. First setup the database on manager node:
+
+    `docker run -d --name db --network cluster_net -e POSTGRES_USER=pollsuser -e POSTGRES_PASSWORD=pollspass -e POSTGRES_DB=pollsdb postgres:11.3`
+    
+    And check the logs using `docker logs db`. We didn't create a persistent volume but it would have been created
+    using an anonymous name by docker engine itself anyways.
+    
+52. Even though overlay network `cluster_net` is not visible on worker 1, it is there. So let's start the application
+server:
+
+    `docker run -d --name app1 --network cluster_net -e "DATABASE_URL=postgresql://pollsuser:pollspass@db/pollsdb" pythonincontainers/django-polls:nginx`
+    
+    We can check the logs to see it works perfectly. Let's initialize the database:
+    
+    `docker run -it --rm --network cluster_net -e "DATABASE_URL=postgresql://pollsuser:pollspass@db/pollsdb" pythonincontainers/django-polls:nginx python manage.py migrate`
+    
+    This works perfectly meaning that this container can access the `db` container running on a different node without
+    problems and that too using just the container name `db`. Multi-node container name resolution is one of the coolest
+    features of Docker swarm.
+    
+    We can just create the super user and complete the initialization. We will skip loading initial data:
+    
+    `docker run -it --rm --network cluster_net -e "DATABASE_URL=postgresql://pollsuser:pollspass@db/pollsdb" pythonincontainers/django-polls:nginx python manage.py createsuperuser`
+    
+53. Let's run the custom nginx (proxy) server on worker 2:
+
+    `docker run -d --name proxy --network cluster_net -p 8000:8000 pythonincontainers/mynginx:latest`
+    
+    The website is accessible at the worker 2 node: `192.168.99.102:8000`
+    
+    Side note: Even though overlay network has container name resolution (DNS), some python modules using DNS caching
+    and this can be a problem if the container has restarted on a different node. This affect nginx also. But there
+    are settings available to overcome this problem.
+    
+    Best cleanup by removing containers on the 3 nodes and additionally the volume and network on the manager node
+    where the database container was setup.
+    
+54. Swarm service starts a container or multiple containers as a part of cluster NOT as standalone containers like the
+example we saw above.
+
+    A service is created on the manager node.
+    
+    **We can say that swarm service definition is like a desired state concept** like we learnt when using
+    docker-compose. The idea of "desired state concept" goes back to declarative programming or config where the
+    desired state is just explicitly declared and the provisioning tool takes care of the "how" part i.e. how to bring
+    the system to this state.
+
+55. Launching a swarm service == telling the swarm manager the desired state of the service. This includes:
+
+    * Image this service should run: This means that a service is homogeneous when it is in the desired state. All
+    containers implementing the service use the same image. 
+    
+    A service can be in a rolling update state in which its images are changed to new ones.
+    
+    * Type of Deployment and number of replicas: Identical containers used to launch a service are called replicas.
+    
+    * Placement preferences and constraints: Service replicas can be scheduled to run on a subset of swarm cluster nodes
+    that have matching preferences or constraints. My comment: May be you want tensorflow containers to run only on
+    nodes with dedicated GPUs.
+    
+    We can schedule a service to have all its replicas on a particular node or only on manager nodes in a given
+    datacenter etc.
+    
+    * Health checks: A service may have a health check mechanism defined as well as how to control health status
+    of the container implementing this service.
+    
+    * Resource Limits and Reservations: Since swarm allows a certain level of automation in the management of services,
+    it also enables control of resource usage for a given service in a cluster.
+    
+    We can, for example, specify the maximum amount of RAM or CPU which a service can use.
+    
+    Another option is to reserve a certain amount of resources to always be available to containers implementing a
+    certain service.
+    
+    * Restart Policy: Swarm manager may be required to restart containers under specific containers. This is used to
+    declare desired behavior.
+    
+    * Update and Rollback policy: Swarm managers can automate service image update. If and when a new image is available
+    the container implementing the given service may be restarted with the newer image. Options to consider:
+    
+        - how to restart the containers
+        - how many at a time
+        - what delay between restarts
+        - what to do if there is a failure
+        - how to roll-back if the new image is broken
+        
+    * Configs and Secrets: These can be consumed by the containers of the service in swarm.
+    
+    * Networks: Containers implementing the service should be attached to the given networks.
+    
+    * Volumes: Containers implementing the service should be attached to the given volumes.
+    
+    * Other desired properties include: hostname, USERID to run the container, working directory etc.
+    
+56. All the elements mentioned in the last point jointly define the desired state of the service. 
+
+    1. We pass it to the swarm manager with **`docker service create`**
+    2. or put it in a docker-compose file with some extra swarm related options and pass it with `docker stack deploy`
+    
+57. Assuming the cluster has been initialized (workers have joined it) and we are in the swarm manager context, we can
+execute the following:
+
+    `docker service create --detach --name hello --replicas 2 -p 5000:5000 --hostname "hello-{{.Task.Slot}}" pythonincontainers/flask-hostname`
+    
+    * `docker service create` creates a new swarm service in a cluster
+    * `--detach` new service is supposed to run in the background and not send its logs to the terminal window
+    * `--name` sets the service name (in this case "hello")
+    * `--replicas` sets the service to be run in 'replicated' mode (the default type) with 2 replicas (default is 1).
+    * `-p 5000:5000` publishes 5000 of each container implementing this service to port 5000 of the `ingress` network
+    (which is an overlay network as can be seen doing `docker network ls`:
+    
+    ```shell
+    NETWORK ID          NAME                DRIVER              SCOPE
+    c2bddd2418cb        bridge              bridge              local
+    f599fa4123b5        docker_gwbridge     bridge              local
+    14ae5bb0bf0b        host                host                local
+    0upkld9z57uc        ingress             overlay             swarm
+    fdc24cf2cb7e        none                null                local
+    ```
+    * `--hostname` sets the hostname of each container of the service. In this case it is set to hello +
+    sequence number of the container. More on name templates later.
+    
+    The first time the command it executed it takes a while since each swarm node where containers are scheduled to run
+    must pull the image from Dockerhub.
+    
+58. Services in a cluster can be listed using `docker service ls` which when executed (only possible manager node)
+shows the following:
+
+    ```shell
+    ID              NAME       MODE          REPLICAS     IMAGE                                      PORTS
+    mn2o362xzcjy    hello      replicated    2/2          pythonincontainers/flask-hostname:latest   *:5000->5000/tcp
+    ```
+    
+    Replicas 2/2 means <how many are running> / <how many are desired>
+    
+59. We can see the basic details of the service by doing `docker service ps <service name>` (service name is "hello"):
+
+    ```shell
+    ID             NAME       IMAGE                                      NODE         DESIRED STATE   CURRENT STATE            ERROR   PORTS
+    n4fufovvlg7r   hello.1    pythonincontainers/flask-hostname:latest   swarm-mgr1   Running         Running 35 minutes ago                       
+    emdmjrbmkul8   hello.2    pythonincontainers/flask-hostname:latest   swarm-wrk2   Running         Running 35 minutes ago                       
+    ```
+
+60. Swarm uses **"tasks"** to implement services which is another name for containers that are swarm citizens. A task is 
+analogous to a “slot” where the scheduler places a container. Once the container is live, the scheduler recognizes that
+the task is in a running state.
+
+61. "hello" service implemented above has 2 tasks each implementing one replica. Each task in turn gets implemented
+with exactly one container.
+
+62. The docker containers can be viewed on the corresponding node using the familiar `docker ps` command.
+
+63. How does docker decide what nodes to the run the tasks on? The default scheduling algorithm is spread. The goal
+of the algorithm is to evenly allocate containers to all swarm nodes.
+
+64. Swarm service can be inspected with `docker service inspect --pretty <service name>`. The pretty flag makes the
+output more YAML like than JSON:
+
+    ```YAML
+    ID:             mn2o362xzcjy4t2rg2h00w8wt
+    Name:           hello
+    Service Mode:   Replicated
+     Replicas:      2
+    Placement:
+    UpdateConfig:
+     Parallelism:   1
+     On failure:    pause
+     Monitoring Period: 5s
+     Max failure ratio: 0
+     Update order:      stop-first
+    RollbackConfig:
+     Parallelism:   1
+     On failure:    pause
+     Monitoring Period: 5s
+     Max failure ratio: 0
+     Rollback order:    stop-first
+    ContainerSpec:
+     Image:         pythonincontainers/flask-hostname:latest@sha256:a31ee9ea32c263ed69f53a857ce821c8db3ec584b5d43bc8e0efa1d675335a58
+     Init:          false
+    Resources:
+    Endpoint Mode:  vip
+    Ports:
+     PublishedPort = 5000
+      Protocol = tcp
+      TargetPort = 5000
+      PublishMode = ingress 
+    ```
+
+    One interesting thing is the `Endpoint Mode: vip` where vip stands for virtual IP. This means that the *service*
+    itself also gets its own (virtual) IP address besides each implementing container getting its own IP address.
+    
+    We can also see in the very last line that the `PublishMode` is ingress.
+    
+65. So going back the question: what is this `Endpoint Mode: vip`? This can be visualized rather simply using the
+following diagram:
+
+    ![sawrm service virtual endpoint ip](staticfiles/service-virtual-endpoint-ip.png)
+    
+    Our hello service has 2 replicas which means there are 2 containers with their own IPs. Containers, however, can
+    come and go since they are disposable. If a container (implementing a task) dies or otherwise becomes unhealthy,
+    the swarm manager can restart it according to the restart policy.
+    
+    So the service is kept available regardless of the containers implementing it or the current health status of each.
+    
+    Hence, the service has a fixed network endpoint i.e. its virtual IP address.
+    
+    The service discovery returns the endpoint virtual IP each time we lookup the service name. This means we are no
+    longer concerned with the individual containers of our service (and hence their IPs).
+    
+    When a client sends a request to the service endpoint, swarm routes this request to one of the active containers
+    (tasks) implementing the service.
+    
+    To make it concrete -> when we send a request to `hello:5000` the request is sent to port 5000 of one of the
+    two service containers. We can try this out by first finding out the IP of the swarm-mgr1 using 
+    `docker-machine ip swarm-mgr1` and then making requests to <IP:5000>. We can see from the changing number in the
+    response to different containers respond to the request everytime it is refreshed. Question from me: This is the
+    IP of the VM (i.d. docker-machine). I still don't know how to see the virtual IP of the swarm service (if it
+    exists as a number and not merely as an abstraction).
+    
+    Swarm uses round robin algorithm to spread requests evenly across all tasks.
+    
+    Lets update the number of replicas to 5:
+    
+    `docker service update --replicas 5 hello`
+    
+    and scale it down again using the same command (replace 5 with 3).
+    
+66. When do replicas make sense? Allows for the increased parallel handling of requests.
+    
+67. Swarm can upscale and downscale the number of replicas depending on the number of incoming requests.
+
+68. The application must be architected and coded properly to take advantage of the service model of docker swarm.
+
+69. Essentially, a swarm service is a controller object. An object used to manage state.
+
+70. Tasks monitor the containers they run.
+
+71. To see the "static" virtual IP of the service we can do the following:
+
+    `docker service inspect --format '{{json .Endpoint.VirtualIPs}}' hello | jq '.'`
+
+    Another way is to start a cluster using a manually created overlay network (default ingress is not manually
+    attachable) and then joining that network with a linux container to ping the service or do `nslookup <service name>`
+    to see the IPs of the service and that of the supporting containers.
+    
+    The way to start a service with a custom network is to create one and then pass it as flag
+    `--network <network name>` to the `docker service create`. See lecture "84. Service Modes and Ingress Routing Mesh"
+    for details.
+    
+    The entire service can be removed using `docker service rm <service name>`
+    
+72. Docker swarm has another service mode called **global**. In this mode, a service creates exactly one task per
+cluster node.
+
+    This kind of setup is useful in following scenarios:
+    
+    1. Fat containers: May be allowed to use nearly all node's resources
+    2. High availability: More nodes means better availability. One example could be a DB engine in each node. Swarm
+    doesn't offer good control over its scheduling algorithm and can't really guarantee an even spread of containers
+    in the replicated mode.
+    3. Control and Monitoring Services: Such should be run globally to have access to docker socket for example.
+    Another example is the GUI tool Pertainer which is also deployed in global mode to be able to monitor containers
+    in each node of the cluster.
+    
+    A service in the global mode would look like this:
+    
+    ![swarm service global mode](staticfiles/swarm-service-global-mode.png)
+    
+73. Let's start a global service:
+
+    `docker service create --name global --network hello_net --mode global pythonincontainers/flask-hostname`
+    
+    hello_net was created previously using:
+    
+    `docker network create --driver overlay --attachable hello_net`
+    
+    Now we can have a look at the tasks using `docker service ps global`:
+    
+    ```shell
+    ID            NAME                               IMAGE                                      NODE         DESIRED STATE       CURRENT STATE                ERROR               PORTS
+    uzqqlan9uh49  global.2gdaqa5r48wrvqrre3ty1vgox   pythonincontainers/flask-hostname:latest   swarm-wrk1   Running             Running about a minute ago                       
+    52rgpgqinr3m  global.doywba3lxyyxpl2euoi1rqvlk   pythonincontainers/flask-hostname:latest   swarm-mgr1   Running             Running about a minute ago                       
+    zroi28qv9b5c  global.aiewdphpac3yk6i9gto18r592   pythonincontainers/flask-hostname:latest   swarm-wrk2   Running             Running about a minute ago            
+    ```
+    
+    The names are uglier since they have node IDs now instead of task number.
+    
+    The IDs can be found if we do `docker node ls` and compare the NAME column of the last table with ID column below:
+    
+    ```shell
+    ID                            HOSTNAME     STATUS    AVAILABILITY    MANAGER STATUS      ENGINE VERSION
+    doywba3lxyyxpl2euoi1rqvlk *   swarm-mgr1   Ready     Active          Leader              19.03.12
+    2gdaqa5r48wrvqrre3ty1vgox     swarm-wrk1   Ready     Active                              19.03.12
+    aiewdphpac3yk6i9gto18r592     swarm-wrk2   Ready     Active                              19.03.12
+    ```
+    
+74. Service behavior when a container fails or gets lost is very similar to the replicated mode. The task is recreated
+on the same node.
+
+    Similarly, the endpoint is also static (the vip mode) and the load is distributed evenly across the containers.
+    
+    We can resolve the DNS name "global" to get the IPs of all containers implementing the service.
+    
+75. Swarm services can publish ports. If service endpoint mode is set to VIP (virtual IP), any traffic sent to the
+published port is sent to entrypoint virtual IP (i.e. service's VIP) and gets routed to one of the containers of the
+service.
+
+76. Service can publish ports in 2 modes:
+
+    * Ingress
+    * Host
+    
+    Lets have a look at differences.
+    
+77. Ingress mode:
+
+    * Ingress network spans across all nodes in the swarm
+    * Port published in the ingress mode is published to the same target on each node
+    * This means that say if port 5000 has been published, this means we can access the service on port 5000 on every
+    swarm node (i.e. directly use a worker node's IP with port 5000 will still lead to a valid response that may
+    actually be generated from a container in another node since there is no guarantee the same node's container
+    will get the chance to process it)
+    * Requests are routed to the service VIP (virtual IP) which evenly routes the requests to all containers
+    * Side point: When doing `docker service create` the long syntax for port publishing can be used which goes like
+    this: `docker service create .... --publish published=5000,target=5000,mode=ingress` (3 params all without spaces).
+    * Global mode behaves pretty much like the replicated mode except that there is a container on each node.
+    
+78. Host mode:
+
+    * The service mesh created by ingress can be bypassed using the host mode.
+    * To create (using long syntax): `docker service create ... --publish published=5001,target=5000,mode=host`
+    * This means that a request on a swarm node will be served by the container on that node. We avoid extra circulation
+    of the request first being routed to the service endpoint that then routes it again to one of the containers.
+    * This can be verified by using the IP of the swarm node and calling the published port several times, it will
+    always be served by that same node's container (which uses that port of the node in question).
+    * This doesn't mean the service is not accessible using its VIP address to other services that may be part of the
+    same network. 
+    * In fact, replicated service can also have published ports in host mode. This means that if the request is
+    coming from a node, then that node better have a container running the service otherwise it is not routed to the
+    service endpoint (only services that use the endpoint directly benefit from the VIP endpoint).
+    
+      Furthermore, this also means a maximum of one container per node can be run despite being on the "replicated" mode
+      since there will be a port conflict if 2 containers on the same node try to publish to the same node.
+
+79.  
