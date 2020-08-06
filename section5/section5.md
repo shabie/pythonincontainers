@@ -1643,4 +1643,368 @@ service.
       Furthermore, this also means a maximum of one container per node can be run despite being on the "replicated" mode
       since there will be a port conflict if 2 containers on the same node try to publish to the same node.
 
-79.  
+79. So there are 2 ways to deploy multi-container applications in a swarm cluster:
+    
+    1. service by service manually (very error prone)
+    2. all services as a stack
+    
+80. `docker stack` is used to deploy and manage deployments. Individual services in the deployment are managed using
+the `docker service` command.
+
+    Docker stack command can deploy groups of services defined in docker-compose file to a swarm or even kubernetes
+    cluster.
+    
+    The deployment in a kubernetes cluster is an interesting feature. We can try and test the deployment first
+    in the swarm cluster and then deploy it in production in a kubernetes cluster.
+    
+81. Docker stack command **ignores** some docker compose file options. Similarly, it uses some other options that
+are ignored by the docker-compose command.
+
+    Here are the differences:
+    
+    ![compose file options ignored stack vs compose](staticfiles/options-ignored-compose.png)
+
+    For example, stack command doesn't build images defined in compose file
+
+82. Configs and secrets:
+    * Both work in a similar way. 
+    * They are created with a file or read from standard input
+    * Can be text or binary
+    * Sent over encrypted connection to swarm managers
+    * Stored in Raft log at manager nodes
+    * The Raft log is synchronised between all manager nodes
+    
+    Raft consensus group:
+    
+    ![raft consensus group](staticfiles/raft-log.png)
+    
+    An excellent visual description of the raft algorithm can be found [here](http://thesecretlivesofdata.com/raft/).
+    
+    Highlights of raft visualization:
+    1. How a leader node is selected using voting
+    2. How in case of even number of nodes, leader is selected by nodes becoming candidates after a random delay to
+    break deadlock
+    3. If by a very small chance, delay matches up, candidacy delays are reset since two nodes can't both be leaders
+    4. How a leader waits for confirmation from follow nodes before committing etc.
+    
+83. When a service task is about to launch a container using a config, it is retrieved by the docker engine on the
+target node over encrypted connection. Then the content of the config is stored in a file at engine storage area and
+mounted into container's filesystem at the specified path.
+
+    We can specify UserID and GroupID as access mode for the mounted config file.
+    
+84. Docker engine doesn't interpret the content of the config file so it can be text or any other text like binary.
+
+85. A mounted config is read-only. Config can be updated and running services can be updated with a new version of the
+config.
+
+86. Secrets are handled in a similar way (as mentioned earlier) but with one difference: swarm nodes store encrypted
+secret in **memory filesystem only during the lifetime of the containers** granted access to the secret.
+
+    When a container is removed, the secret it used is flushed away from its node's memory.
+    
+87. Secrets can be mounted as files in the container's filesystem. Configs are mounted at "/" as read-only files.
+Secrets are mounted as read-only files too at "/run".
+
+88. Let's look at a docker-compose file defining groups of services (as a stack):
+
+    ```yaml
+    # flask_hostname.yml
+    version: "3.7"  # this is the docker-compose version NOT python version
+
+    networks:
+      hello_net:  # should be accessible under this name for containers & services outside of this deployment
+        driver: overlay
+        name: hello_net
+        attachable: true
+
+    configs:
+      nginx_config:
+        file: ./flask_lb_nginx.conf
+      # my_other_config:
+        # external: true # configs can also be declared outside of compose file using `docker config create` cmd
+
+    secrets:  
+      my_password:  # each container part of this hello service will be granted access to this secret
+        file: ./my_password.txt
+      # my_other_password:
+        # external: true # secrets can also be defined outside of compose file using `docker secret create`
+
+    services:
+      hello:
+        image: pythonincontainers/flask-hostname:v1  # node running the task must have access to dockerhub
+        networks:
+          - hello_net
+        secrets:  # mounted in /run/secrets as a file called my_password in the container filesystem
+          - source: my_password
+            target: my_password  # if path begins with / then it's considered an absolute path else within /run/secrets
+            uid: '999'  # user id
+            gid: '0'    # group id
+            mode: 0440  # user and group both can't write or execute, only read https://chmodcommand.com/chmod-0440/
+        # docs: https://docs.docker.com/engine/reference/commandline/service_create/#create-services-using-templates
+        hostname: "hello-{{.Task.Slot}}"  # example of named template. can even be used for env. vars. specific to node.
+        deploy:
+          mode: replicated    # or global
+          replicas: 3         # valid for replicated mode
+          endpoint_mode: vip  # service virtual IP
+          placement:
+            constraints:
+              - node.role == worker  # deploy only on worker nodes
+              ### other options ###
+              # - node.hostname
+              # - node.id
+              # - node.labels
+              # - engine.labels
+        labels:
+          com.example.stack.composefiles: "flask_hostname.yml"
+
+      proxy:
+        image: nginx:1.16.0
+        networks:
+          - hello_net
+        configs:
+          - source: nginx_config
+            target: /etc/nginx/conf.d/hello.conf  # path where the config will be loaded in the container filesystem
+        ports:
+          - target: 5000
+            published: 5000
+            mode: ingress
+        deploy:
+          mode: replicated
+          replicas: 1
+          endpoint_mode: vip
+          placement:
+            constraints:
+              - node.role == manager
+        labels:
+          com.example.stack.composefiles: "flask_hostname.yml"
+    ```
+    
+89. A note about the deployment specially with regards to Nginx. The compose file such as the one above is deployed
+in a certain order:
+
+    1. First stack command creates configs, secrets and networks
+    2. Then services and associated volumes
+    3. Services are deployed in random order as well as tasks within the service
+    
+    Hence there is no guarantee that hello service deploys as the first one and then the proxy.
+    
+    Another factor influencing the order is the image availability which must be pulled if not available in local
+    image cache of the node. Some nodes may pull images faster than others.
+    
+    This means proxy service may start running before hello service starts.
+    
+    Nginx in the community edition checks the availability of the upstream system (i.e. the application server) first
+    thing after it comes up. This is not relevant to Nginx plus (the paid version).
+    
+    Hence, if there are no hello service containers up and running by that time, Nginx fails.
+    
+    Swarm cluster will restart it until it can find the hello container.
+    
+    To avoid this from happening, we need a workaround. The workaround (though I am not sure what it is doing), looks
+    like this:
+    
+    ```
+    # flask_lb_nginx.conf
+
+    server {
+    listen      5000;
+    server_name _; # special "catch all" Server Name, please substitute with something appropriate
+    charset     utf-8;
+
+    client_max_body_size 75M;   # adjust to taste
+
+    resolver 127.0.0.11;
+
+    set $hello http://hello_hello:5000;
+
+    location / {
+        proxy_pass $hello;
+        }
+    }
+    ```
+    
+90. Let's deploy!
+
+    `docker stack deploy -c flask_hostname.yml hello`
+    
+    where "hello" at the end is an arbitrary name we have chosen for this stack.
+    
+    The deployment is visible in the visualizer.
+    
+    ![stack deployment](staticfiles/stack-deployment.png)
+    
+    The service names are hello_hello and hello_proxy so the pattern is <STACK_NAME>_<SERVICE_NAME>.
+    
+    ```shell
+    shabie:~/projects/containers/section5/swarm-stack(master)$ docker service ls
+    ID            NAME          MODE          REPLICAS      IMAGE                                  PORTS
+    rm8tehhay1v8  hello_hello   replicated    3/3           pythonincontainers/flask-hostname:v1   
+    rcup4z3mvtnj  hello_proxy   replicated    1/1           nginx:1.16.0                           *:5000->5000/tcp
+    8igonzav0fcm  viz           replicated    1/1           dockersamples/visualizer:stable        *:8080->8080/tcp
+    ```
+    
+    We can see also the output of `docker stack ls`:
+    
+    ```
+    NAME                SERVICES            ORCHESTRATOR
+    hello               2                   Swarm
+    ```
+    
+    Also try `docker stack services hello` returns the same as `docker service ls` but only for one stack named hello.
+    
+    To list all tasks of a stack we can do `docker stack ps hello`:
+    
+    ```
+    ID            NAME           IMAGE                                  NODE         DESIRED STATE  CURRENT STATE            ERROR               PORTS
+    rvaxro6ys07z  hello_proxy.1  nginx:1.16.0                           swarm-mgr1   Running        Running 16 minutes ago                       
+    vpzcwrbwxybv  hello_hello.1  pythonincontainers/flask-hostname:v1   swarm-wrk2   Running        Running 16 minutes ago                       
+    sc456kbx31xn  hello_hello.2  pythonincontainers/flask-hostname:v1   swarm-wrk2   Running        Running 16 minutes ago                       
+    z5zhidmwbkjj  hello_hello.3  pythonincontainers/flask-hostname:v1   swarm-wrk1   Running        Running 16 minutes ago                       
+    ```
+   
+    The command above will also show any failed ro stopped tasks since the deployment started.
+    
+91. Let's try to access the stack deployment. Since the proxy service publishes the port 5000 in ingress mode,
+this means the service is accessible on any node.
+
+    Let's try to access it from worker node 2.
+    
+    `curl $(docker-machine ip):5000 swarm-wrk2` to get the IP first.
+    
+    Several calls will rotate the number since requests are forwarded to one of the 3 replicas using the SPREAD
+    algorithm.
+    
+    ```bash
+    shabie:~/projects/containers/section5/swarm-stack(master)$ curl $(docker-machine ip swarm-wrk2):5000
+    Flask Hello world! I am running on hello-3
+    shabie:~/projects/containers/section5/swarm-stack(master)$ curl $(docker-machine ip swarm-wrk2):5000
+    Flask Hello world! I am running on hello-2
+    shabie:~/projects/containers/section5/swarm-stack(master)$ curl $(docker-machine ip swarm-wrk2):5000
+    Flask Hello world! I am running on hello-1
+    ```
+    
+    We can scale up just the hello service of the hello stack using the following command:
+    
+    `docker service update --replicas 6 hello_hello`
+    
+    This is possible but should be avoided because the state (i.e. 6 replicas) of the services is not as declared;
+    in the compose file.
+    
+    A stack can be brought back to its declared state in compose file by simply running the deploy command again.
+    
+    The right way to update the number of replicas would be create a new version of the compose file (or I guess at
+    least have a new commit for it).
+    
+    Let's say we have another version that just has a different number of replicas. What do we do?
+    
+    We can just do this: `docker stack deploy -c flask_hostname_v2.yml hello` and the services will be updated.
+    
+    Update of the stack is a subject of application lifecycle in a swarm cluster. More details on this to follow.
+    
+    Let's bring it down: `docker stack rm hello`
+    
+92. Let's deploy a stack that has an scalable database cluster with the following YAML:
+
+    ```yaml
+    version: "3.7"
+
+    networks:
+      galera_net:
+        driver: overlay
+        name: galera_net
+        attachable: true
+      proxy_net:
+        driver: overlay
+
+    configs:
+      proxy_conf:
+        file: ./mysite_nginx_in_swarm.conf
+
+    services:
+
+      galera:  # based on https://github.com/matthanley/docker-galera (interesting article included)
+        # this implementation includes automated deployment, fail-over & rejoining of recovered galera nodes
+        # also this is master-master setup: https://en.wikipedia.org/wiki/Multi-master_replication
+        image: pythonincontainers/galera:latest
+        env_file:
+          - ./db_params.env
+        networks:
+          - galera_net
+        deploy:
+          mode: global  # endpoint mode is VirtualIP which is default so not explicitly declared
+    # Galera Image requires SERVICE_NAME variable to be set to actual name
+    # of 'galera' Service. Value below assumes the Stack is deployed
+    # with 'django-polls' Stack Name.
+    # Service Name is '<stack_name>_galera'
+        environment:
+          SERVICE_NAME: django-polls_galera
+
+      app:
+        image: pythonincontainers/django-polls:nginx
+        networks:
+          - galera_net
+          - proxy_net
+        env_file:
+          - ./db_params.env
+        deploy:
+          mode: replicated
+          replicas: 3
+
+      proxy:
+        image: pythonincontainers/mynginx:latest
+        networks:
+          - proxy_net
+        ports:
+          - target: 8000
+            published: 8000
+            mode: host
+        configs:
+          - source: proxy_conf
+            target: /etc/nginx/conf.d/mysite_nginx.conf
+        deploy:
+          mode: global
+    ```
+    
+    To deploy:
+    `docker stack deploy -c <yaml-filename> django-polls`
+    
+    The deployment stack now looks like this:
+    
+    ![stack deployment db cluster](staticfiles/stack-deployment-db-cluster.png)
+    
+    The database in django-polls needs initialization so we can do that now by using a standalone container that is
+    attached to the galera_net.
+    
+    `docker run --rm -it --network galera_net -e "DATABASE_URL=mysql://pollsuser:pollspass@galera/pollsdb" pythonincontainers/django-polls:nginx python manage.py migrate`
+    
+    >A few considerations: the containers need to be in sync before galera can start i.e. all tasks need to have been
+    initialized before it becomes available. This means that there are a few moments right after the deployment where
+    galera is in the cluster synchronisation phase but the service endpoint may end up sending requests to it that
+    don't get served. This takes a few seconds but something to be aware of.
+    >
+    >The same applies to the restarted task: if a galera task fails and gets recreated, there is a moment where the
+    container is already included in the pool of endpoint IDs but its mariaDB engine is still synchronising data
+    from the "donor" database. If the app service task gets connected to such a newly started galera task,
+    it may lead to an error like "no table found" because the table may not have been created by then.
+    >
+    >In both the above cases, "health checks" are not an easy fix (I guess because most of it is happening beyond the
+    reach of "normal" monitoring services).
+    
+    Let's complete the initialization:
+    
+    `docker run --rm -it --network galera_net -e "DATABASE_URL=mysql://pollsuser:pollspass@galera/pollsdb" pythonincontainers/django-polls:nginx python manage.py loaddata initial_data.json`
+    `docker run --rm -it --network galera_net -e "DATABASE_URL=mysql://pollsuser:pollspass@galera/pollsdb" pythonincontainers/django-polls:nginx python manage.py createsuperuser`
+    
+    Let's kill all tasks running on a particular node (called "draining" the node):
+    
+    `docker node update --availability drain swarm-wrk2`
+    
+    All tasks disappear and pop-up in other nodes in the visualizer:
+    
+    ![drain node in a stack](staticfiles/drained-node-in-a-stack.png)
+    
+    It can be reactivated again using: `docker node update --availability active swarm-wrk2`
+
+    Let's remove the stack to cleanup: `docker stack rm django-polls`
+    
