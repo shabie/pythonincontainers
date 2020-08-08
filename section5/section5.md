@@ -2150,3 +2150,103 @@ components:
     
     41. Application initialization is indeed a complex topic. There may even be a separate controller module needed
     to coordinate a clean start.
+    
+94. Docker swarm supports automated update of service tasks. But first what is meant by the term *update* here? This
+means generally to change its desired state. Concretely it can mean:
+
+    * add new services, networks or volumes
+    * remove new services, networks or volumes
+    * change an image of a service
+    * change networks to which the services are attached
+    * change volumes attached to the service
+    * change environment variables
+    * change placement options
+    * change health check definitions
+    * change published ports
+    * change configs or secrets
+    
+    Almost everything can be changed except the **service mode** i.e. you cant switch from replicated to global or
+    global to replicated for a service.
+    
+95. Individual services in a stack can be updated using the `docker service` command. Here's an example of increasing
+the number of replicas in a service: `docker service update --replicas 6 <stack_name>_<service_name>`
+
+96. What if we want to change the image running in a container? This causes a restart. Here's the command for this:
+
+    `docker service update --image <image_name_of_updated_version> <stack_name>_<service_name>`
+    
+    The new image is pulled by the nodes and the containers are restarted with the new image. Since nodes pull images
+    at different speed, this means that for some duration both v1 and v2 can be served in parallel.
+    
+    If this is not desirable, then the service must be removed and redeployed to have consistency of versions.
+    
+    Generally in practice, new images are designed such that this is not a problem. New image should implement
+    a very similar API, possibly extending the old one.
+    
+    If for some reason we don't think it is working the way we want it to we can do this to rollback:
+    `docker service rollback <stack_name>_<service_name>`. In a short while, all service tasks are restarted with the
+    older version.
+    
+    Run this command again, and you're back to the updated version because swarm doesn't store history like a browser,
+    only the previous state.
+    
+97. Not just services, but also running stacks can be updated in a similar fashion using simply another compose file but
+using the same stack name. Here are some highlights of the updated version:
+
+    ```yaml
+    # Update Config for "replicated" Service
+          update_config:
+            parallelism: 1  # means how many tasks are updated in parallel. We can use 0 to update all of them at once.
+            delay: 5s       # how long to wait after an update is complete before starting the next one
+            order: start-first        # start a new task before stopping the old task. Opposite is 'stop-first'.
+            failure_action: rollback  # what to do if the new task fails to start. Other options 'rollback', 'pause'
+            monitor: 3s     # monitor new task for this long to see if it remains healthy (should be shorter than delay)
+    # Rollback Config for "replicated" Service
+          # the options below are the same
+          rollback_config:
+            parallelism: 1
+            delay: 5s
+            order: start-first
+            failure_action: pause
+            monitor: 3s
+    ```
+    
+98. Docker swarm allows controlling resources like CPU usage and RAM. But hard limit on physical RAM does not mean
+virtual memory (swap memory i.e. the one on the disk) is also limited. Running a single docker container, it is possible
+to limit it using `--memory` and `--memory-swap` options. No such option until now exists for Docker swarm.
+
+    This has the downside that container may limit physical memory but still fails due to swap area contention (aka
+    memory contention). 
+    
+    Memory contention: It is a situation in which two different programs, or two parts of a program, try to read items
+    in the same block of memory at the same time.
+    
+    The limits can be set like this:
+    
+    ```yaml
+    resources:
+      limits:
+        cpus: '0.25'
+        memory: 500M
+        reservations:
+          cpus: '0.1'
+          memory: 300M
+    ```
+
+99. Swarm has an option in the compose file `reservations` (see above) which can be defined as the minimum amount of
+resources a task is assured to get.
+
+    This is just a simple mathematical check done by the swarm cluster. It is by no means a reflection of the actual
+    load. So before starting a task on a node, the cluster will check if the node is *supposed* to have this many
+    resources (subtracting existing task resources from node's full resources), and if the condition is met, the
+    task is scheduled on that node. In reality the node may have less RAM available for example since containers
+    are not bound by reservations maths.
+    
+    Say I have 4 nodes of 1 GB each. Then the reservations (as shown above of 300M) means I can run 4096/300 = 13.65
+    tasks. But realistically the number is more like 12 because each node has its own processes that take um the RAM
+    leaving less to go around.
+    
+    Tasks that couldn't be started due to reservations get the message of "insufficient resources on node..."
+    
+    If reservation numbers are to mean anything, then we should have them for all services. If reservations are not
+    specified, they are not checked for.
