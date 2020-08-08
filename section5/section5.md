@@ -2008,3 +2008,145 @@ this means the service is accessible on any node.
 
     Let's remove the stack to cleanup: `docker stack rm django-polls`
     
+93. Let's have a look at key features of docker swarm that impact software architecture and the way we code software
+components:
+
+    1. A complex application consists of many small software components which are deployed as groups of services i.e.
+    the swarm stack.
+    
+    2. Such components must be packaged in docker images
+    
+    3. The images must be shipped to image registries so that the components can be delivered to final deployment
+    runtime environment
+    
+    4. Containers using shared memory to communicate between containers require special attention to guarantee that
+    both/all such containers end up on the same node (by default the node is selected randomly) and can share the
+    memory segment.
+    
+    5. Docker swarm has no built-in mechanism to enable container in one node to access data in another container
+    on another node.
+    
+    6. One container can be attached to one or more networks through its network interfaces.
+    
+    7. Within a container, one network interface is connected to one network and gets its unique IP (for each network).
+    
+    8. A container can be attached and detached to and from a network while running.
+    
+    9. Hostname is used inside the container. It may be different from 1) container name and 2) names in DNS records 
+    associated to container IP addresses
+    
+    10. Environment Variables which are injected into containers first process by Docker engine. They are inherited
+    by all processes spawned by it.
+    
+    11. Taking the above into consideration, a running container can be seen as a network server.
+    
+    12. The best way for a container to communicate with other containers is through an IP network.
+    
+    13. **If a container dies and gets restarted on another node, it loses access to the persistent volume attached to
+    it in its original node. The new container will get a fresh volume. An application must be prepared to deal with
+    such a problem.**
+    
+    14. If a service has one replica, other software components must have "patience" for it built into them. Like
+    wait for a while before timeout, number of retries etc.
+    
+    15. Requests are spread among the service containers. We must consider this when programming the service.
+    **Synchronisation** and proper **data transaction management** may be needed to handle parallel request processing.
+    
+    16. Container names in swarm:
+    
+    ![container names in swarm](staticfiles/container-names-in-swarm.png)
+    
+    17. Named templates can be used in hostnames, environment variables and volume options to define target directories.
+    
+    18. In case of a swarm stack, each service has two DNS records. It is visible under its full service name with stack
+    name prefix as well as short service name as defined in compose file.
+    
+    19. Two service endpoint modes: vip (virtual IP assigned to the service) and dnsrr (DNS round robin).
+    
+    20. Docker swarm has support only IPv4 addresses (may change later).
+    
+    21. Docker volumes are simple. They can be created, attached to a container, detached and deleted. **Docker doesn't
+    have volume operations like copy, clone, snapshot etc.**. Some plugins (3rd party) add such additional capabilities.
+    
+    22. Container filesystem is not designed to store large amounts of data or to deliver good write performance. We
+    have volumes for that.
+    
+    23. Containers are meant to be short-lived by design
+    
+    24. Volumes are like a filesystem that can store files and folders (at least from the container's point of view).
+    
+    25. All volumes of a docker engine are stored at `/var/lib/docker/volumes`. This path is part of the docker host's
+    root disk but a disk or disk volume can be mounted to it.
+    
+    26. So if we want to take advantage of advanced capabilities like SSD, snapshot etc., the node needs to have the
+    required setup.
+    
+    27. In order to ensure that nodes with advanced volume capabilities are the ones where containers that need
+    volumes are created, we can label them as such and define constraints.
+    
+    28. Removing a stack does not remove volumes. When it is redeployed, the volumes are reused.
+    
+    29. Multiple replicas running on one node share the named volume (defined in compose file). They must coordinate
+    access to the volume in order to avoid data corruption.
+    
+    30. One common practice is to use persistent nodes in the global deployment mode (each node gets one container),
+    add constraints so the "global" doesn't literally mean all nodes, only specific ones that satisfy the constraints.
+    Yet another option commonly used in cloud-based nodes is to use dedicated storage solutions like AWS EBS or
+    Azure Storage and mount these to the `/var/lib/docker/volume` for extra resiliency.
+    
+    31. This is how a label can be added: `docker node update --label-add com.example.disk=ssd swarm-wrk3`. This
+    can then be used like this in the compose file for let's say the db service:
+    
+    ```yaml
+    ...
+    deploy:
+      placement:
+        constraints:
+          - node.labels.com.example.disk == ssd
+    ```
+    
+    32. Volumes must be removed explicitly by hand from each swarm cluster node. There is no one command for this.
+    
+    33. Don't use bind mounts in a swarm cluster.
+    
+    34. When the configs and secrets are updated in a running stack, the stack restarts those services using it.
+    
+    35. Swarm has health-checks (commands to be executed periodically to see how a container is doing). Such a health
+    check has following parameters:
+    
+        - command: It is run like with `docker exec` command. A new process is created inside container to run it.
+        Such a test is expected to complete quickly and return an exit code of 0 if it is healthy, 1 if it is
+        unhealthy. All other codes are prohibited and may lead to unexpected results.
+        - timeout: If command doesn't come back in this time, it is declared a fail. Default value is 30 seconds.
+        - interval: Repeat interval
+        - start_period: Time it approximately takes for the container to start. Default 0 seconds.
+        - retries: number of times test command fails in a row before a container is declared unhealthy
+        
+    36. When a container becomes unhealthy, its IP is removed from service endpoint set and task is terminated. This
+    leads to a new task being scheduled as defined in service restart policy.
+    
+    37. **HEALTHCHECK** is the keyword used in Dockerfile. Here's an example:
+    
+    ```shell
+    FROM python:3.7.3
+    WORKDIR /app
+    COPY . .
+    RUN pip install -r requirements.txt
+    CMD ["python", "swarm-env.py"]
+    HEALTHCHECK --interval=10s --timeout=3s --retries=2 \
+      CMD curl -f -s http://127.0.0.1:5000/healthcheck || exit 1
+    ```
+    
+    38. Application initialization often needs special attention. For example, the order in which services are deployed
+    may be important but is not so simple to define that in docker swarm. Kubernetes has StatefulSets to accomplish
+    that: https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#using-statefulsets
+
+    39. If we don't use health-checks, containers start and immediately get included the service endpoint address pool,
+    even if the application component is not ready to accept connections. Service code must be able to handle this.
+    
+    40. Health-checks shouldn't have circular dependencies i.e. service 1 waits for 2 to be ready but 2 waits for
+    3 and 3 for 1. Then they'd all restart after a timeout and this could go on forever. My comment But done right, a
+    dependency graph implemented in health checks may enable "ordered" deployment.
+    
+    41. Application initialization is indeed a complex topic. There may even be a separate controller module needed
+    to coordinate a clean start.
